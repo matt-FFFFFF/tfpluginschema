@@ -209,10 +209,5 @@ func (s *Server) GetUniversalClient(request Request) (ProviderClient, error) {
 		return nil, fmt.Errorf("provider not found in cache: %s", request.String())
 	}
 
-	// Create the universal client
-	config := ClientConfig{
-		ProviderPath: providerPath,
-	}
-
-	return NewProviderClient(config)
+	return NewProviderClient(providerPath)
 }

@@ -12,32 +12,27 @@ type ProviderClient interface {
 	Close() error
 }
 
-// ClientConfig holds configuration for creating a provider client
-type ClientConfig struct {
-	ProviderPath string
-}
-
 // NewProviderClient creates a provider client that automatically selects the best protocol version
-func NewProviderClient(config ClientConfig) (ProviderClient, error) {
-	// Try v6 first (most common in modern providers)
-	client, err := newV6UniversalClient(config.ProviderPath)
+func NewProviderClient(providerPath string) (ProviderClient, error) {
+	// Try v6 first
+	client, err := N(providerPath)
 	if err == nil {
 		return client, nil
 	}
 
 	// If v6 fails, try v5
-	client5, err5 := newV5UniversalClient(config.ProviderPath)
+	client5, err5 := newV5UniversalClient(providerPath)
 	if err5 == nil {
 		return client5, nil
 	}
 
-	// If both fail, return the v6 error (most likely to be relevant)
+	// If both fail, return the v6 error
 	return nil, fmt.Errorf("failed to connect with v6: %w, failed to connect with v5: %w", err, err5)
 }
 
 // v6UniversalClient wraps the V6 client to implement UniversalProviderClient
 type v6UniversalClient struct {
-	client V6ProviderSchema
+	client V6Provider
 }
 
 func newV6UniversalClient(providerPath string) (*v6UniversalClient, error) {
@@ -67,7 +62,7 @@ func (c *v6UniversalClient) Close() error {
 
 // v5UniversalClient wraps the V5 client to implement UniversalProviderClient
 type v5UniversalClient struct {
-	client V5ProviderSchema
+	client V5Provider
 }
 
 func newV5UniversalClient(providerPath string) (*v5UniversalClient, error) {
