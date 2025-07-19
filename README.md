@@ -31,4 +31,4 @@ Contributions are welcome! Please ensure that:
 
 ## Acknowledgements
 
-Thanks to the OpenTofu community for their contributions and the maintainers of the OpenTofu plugin protocol. This library builds upon their work to provide a seamless experience for Go developers working with OpenTofu providers.
+Thanks to the OpenTofu community for their contributions and the maintainers of the OpenTofu plugin protocol. This library builds upon their work to provide a seamless experience for Go developers working with Terraform and OpenTofu providers.
