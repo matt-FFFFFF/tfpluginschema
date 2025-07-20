@@ -14,18 +14,12 @@ import (
 	"google.golang.org/grpc"
 )
 
-// Handshake config for go-plugin
-var handshakeConfigV5 = plugin.HandshakeConfig{
-	ProtocolVersion:  5,
-	MagicCookieKey:   "TF_PLUGIN_MAGIC_COOKIE",
-	MagicCookieValue: "d602bf8f470bc67ca7faa0386276bbdd4330efaf76d1a219cb4d6991ca9872b2",
-}
-
-var handshakeConfigV6 = plugin.HandshakeConfig{
-	ProtocolVersion:  6,
-	MagicCookieKey:   "TF_PLUGIN_MAGIC_COOKIE",
-	MagicCookieValue: "d602bf8f470bc67ca7faa0386276bbdd4330efaf76d1a219cb4d6991ca9872b2",
-}
+const (
+	// ProviderPluginName is the name used to identify the provider plugin
+	ProviderPluginName = "provider"
+	MagicCookieKey     = "TF_PLUGIN_MAGIC_COOKIE"
+	MagicCookieValue   = "d602bf8f470bc67ca7faa0386276bbdd4330efaf76d1a219cb4d6991ca9872b2"
+)
 
 // ProviderGRPCPlugin implements the plugin.GRPCPlugin interface for connecting to provider binaries
 type ProviderGRPCPlugin struct {
@@ -80,116 +74,6 @@ func (c *providerGRPCClientV6) V6Schema(req *tfprotov6.GetProviderSchemaRequest)
 	return protoResp, nil
 }
 
-// // convertSchemaFromProto converts a protobuf Schema to tfprotov6.Schema
-// func convertSchemaFromProto(protoSchema *tfplugin6.Schema) *tfprotov6.Schema {
-// 	if protoSchema == nil {
-// 		return nil
-// 	}
-
-// 	result := &tfprotov6.Schema{
-// 		Version: protoSchema.Version,
-// 	}
-
-// 	if protoSchema.Block != nil {
-// 		result.Block = convertSchemaBlockFromProto(protoSchema.Block)
-// 	}
-
-// 	return result
-// }
-
-// // convertSchemaBlockFromProto converts a protobuf Schema_Block to tfprotov6.SchemaBlock
-// func convertSchemaBlockFromProto(protoBlock *tfplugin6.Schema_Block) *tfprotov6.SchemaBlock {
-// 	if protoBlock == nil {
-// 		return nil
-// 	}
-
-// 	result := &tfprotov6.SchemaBlock{
-// 		Version:     protoBlock.Version,
-// 		Description: protoBlock.Description,
-// 		Deprecated:  protoBlock.Deprecated,
-// 	}
-
-// 	// Convert attributes
-// 	if len(protoBlock.Attributes) > 0 {
-// 		result.Attributes = make([]*tfprotov6.SchemaAttribute, 0, len(protoBlock.Attributes))
-// 		for _, attr := range protoBlock.Attributes {
-// 			converted := convertSchemaAttributeFromProto(attr)
-// 			if converted != nil {
-// 				result.Attributes = append(result.Attributes, converted)
-// 			}
-// 		}
-// 	}
-
-// 	// Convert block types
-// 	if len(protoBlock.BlockTypes) > 0 {
-// 		result.BlockTypes = make([]*tfprotov6.SchemaNestedBlock, 0, len(protoBlock.BlockTypes))
-// 		for _, blockType := range protoBlock.BlockTypes {
-// 			converted := convertSchemaNestedBlockFromProto(blockType)
-// 			if converted != nil {
-// 				result.BlockTypes = append(result.BlockTypes, converted)
-// 			}
-// 		}
-// 	}
-
-// 	return result
-// }
-
-// // convertSchemaAttributeFromProto converts a protobuf Schema_Attribute to tfprotov6.SchemaAttribute
-// func convertSchemaAttributeFromProto(protoAttr *tfplugin6.Schema_Attribute) *tfprotov6.SchemaAttribute {
-// 	if protoAttr == nil {
-// 		return nil
-// 	}
-
-// 	// For now, we'll create a basic attribute without the type
-// 	// The type field requires tftypes which is complex to handle here
-// 	return &tfprotov6.SchemaAttribute{
-// 		Name:        protoAttr.Name,
-// 		Description: protoAttr.Description,
-// 		Required:    protoAttr.Required,
-// 		Optional:    protoAttr.Optional,
-// 		Computed:    protoAttr.Computed,
-// 		Sensitive:   protoAttr.Sensitive,
-// 		Deprecated:  protoAttr.Deprecated,
-// 		// Type would need proper tftypes.Type conversion from protoAttr.Type
-// 	}
-// }
-
-// // convertSchemaNestedBlockFromProto converts a protobuf Schema_NestedBlock to tfprotov6.SchemaNestedBlock
-// func convertSchemaNestedBlockFromProto(protoBlock *tfplugin6.Schema_NestedBlock) *tfprotov6.SchemaNestedBlock {
-// 	if protoBlock == nil {
-// 		return nil
-// 	}
-
-// 	var nesting tfprotov6.SchemaNestedBlockNestingMode
-// 	switch protoBlock.Nesting {
-// 	case tfplugin6.Schema_NestedBlock_INVALID:
-// 		nesting = tfprotov6.SchemaNestedBlockNestingModeInvalid
-// 	case tfplugin6.Schema_NestedBlock_SINGLE:
-// 		nesting = tfprotov6.SchemaNestedBlockNestingModeSingle
-// 	case tfplugin6.Schema_NestedBlock_LIST:
-// 		nesting = tfprotov6.SchemaNestedBlockNestingModeList
-// 	case tfplugin6.Schema_NestedBlock_SET:
-// 		nesting = tfprotov6.SchemaNestedBlockNestingModeSet
-// 	case tfplugin6.Schema_NestedBlock_MAP:
-// 		nesting = tfprotov6.SchemaNestedBlockNestingModeMap
-// 	case tfplugin6.Schema_NestedBlock_GROUP:
-// 		nesting = tfprotov6.SchemaNestedBlockNestingModeGroup
-// 	default:
-// 		nesting = tfprotov6.SchemaNestedBlockNestingModeInvalid
-// 	}
-
-// 	result := &tfprotov6.SchemaNestedBlock{
-// 		TypeName: protoBlock.TypeName,
-// 		Nesting:  nesting,
-// 	}
-
-// 	if protoBlock.Block != nil {
-// 		result.Block = convertSchemaBlockFromProto(protoBlock.Block)
-// 	}
-
-// 	return result
-// }
-
 // V5Provider is the interface for v5 protocol clients
 type V5Provider interface {
 	V5Schema(*tfprotov5.GetProviderSchemaRequest) (*tfplugin5.GetProviderSchema_Response, error)
@@ -198,6 +82,22 @@ type V5Provider interface {
 // V6Provider is the interface for v6 protocol clients
 type V6Provider interface {
 	V6Schema(*tfprotov6.GetProviderSchemaRequest) (*tfplugin6.GetProviderSchema_Response, error)
+}
+
+type ProviderSchemaProvider[S any, F any] interface {
+	GetDataSourceSchemas() map[string]*S
+	GetResourceSchemas() map[string]*F
+	GetProvider() *S
+	GetEphemeralResourceSchemas() map[string]*S
+	GetFunctions() map[string]*F
+}
+
+type ProviderSchemaProviderV5 interface {
+	ProviderSchemaProvider[tfplugin5.Schema, tfplugin5.Function]
+}
+
+type ProviderSchemaProviderV6 interface {
+	ProviderSchemaProvider[tfplugin6.Schema, tfplugin6.Function]
 }
 
 // NewClientV5 creates a new provider client for protocol v5
@@ -214,20 +114,17 @@ func NewClientV6(providerPath string) (V6Provider, func(), error) {
 
 func newClient[T any](providerPath string, protocolVersion int) (T, func(), error) {
 	var ret T
-	var handshakeConfig plugin.HandshakeConfig
-	switch protocolVersion {
-	case 5:
-		handshakeConfig = handshakeConfigV5
-	case 6:
-		handshakeConfig = handshakeConfigV6
-	default:
-		return ret, nil, fmt.Errorf("unsupported protocol version: %d", protocolVersion)
+
+	handshakeConfig := plugin.HandshakeConfig{
+		ProtocolVersion:  uint(protocolVersion),
+		MagicCookieKey:   MagicCookieKey,
+		MagicCookieValue: MagicCookieValue,
 	}
 
 	client := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig: handshakeConfig,
 		Plugins: map[string]plugin.Plugin{
-			"provider": ProviderGRPCPlugin{ProtocolVersion: protocolVersion},
+			ProviderPluginName: ProviderGRPCPlugin{ProtocolVersion: protocolVersion},
 		},
 		Cmd:              exec.Command(providerPath),
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
@@ -242,7 +139,7 @@ func newClient[T any](providerPath string, protocolVersion int) (T, func(), erro
 	}
 
 	// Request the plugin
-	raw, err := rpcClient.Dispense("provider")
+	raw, err := rpcClient.Dispense(ProviderPluginName)
 	if err != nil {
 		client.Kill()
 		return ret, nil, fmt.Errorf("failed to dispense provider: %w", err)
