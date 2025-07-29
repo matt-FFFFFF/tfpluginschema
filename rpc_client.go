@@ -2,129 +2,142 @@ package tfpluginschema
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-plugin"
-	"github.com/hashicorp/terraform-plugin-go/tfprotov5"
-	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 	"github.com/matt-FFFFFF/tfpluginschema/tfplugin5"
 	"github.com/matt-FFFFFF/tfpluginschema/tfplugin6"
 	"google.golang.org/grpc"
 )
 
 const (
-	// ProviderPluginName is the name used to identify the provider plugin
-	ProviderPluginName = "provider"
-	MagicCookieKey     = "TF_PLUGIN_MAGIC_COOKIE"
-	MagicCookieValue   = "d602bf8f470bc67ca7faa0386276bbdd4330efaf76d1a219cb4d6991ca9872b2"
+	// providerPluginName is the name used to identify the provider plugin
+	providerPluginName = "provider"
+	// magicCookieKey is the key used for the magic cookie in the plugin handshake
+	magicCookieKey = "TF_PLUGIN_MAGIC_COOKIE"
+	// magicCookieValue is the value used for the magic cookie in the plugin handshake
+	magicCookieValue = "d602bf8f470bc67ca7faa0386276bbdd4330efaf76d1a219cb4d6991ca9872b2"
 )
 
-// ProviderGRPCPlugin implements the plugin.GRPCPlugin interface for connecting to provider binaries
-type ProviderGRPCPlugin struct {
+var (
+	// ErrNotImplemented is returned when a method is not implemented
+	ErrNotImplemented = errors.New("not implemented")
+)
+
+// providerGRPCPlugin implements the plugin.GRPCPlugin interface for connecting to provider binaries
+type providerGRPCPlugin struct {
 	plugin.Plugin
-	ProtocolVersion int // 5 or 6
+	protocolVersion int // 5 or 6
 }
 
-// GRPCClient returns the client implementation using the gRPC connection
-func (p ProviderGRPCPlugin) GRPCClient(ctx context.Context, broker *plugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {
-	if p.ProtocolVersion == 5 {
+// GRPCClient returns the client implementation using the gRPC connection.
+// Must be exported for the plugin framework to use it.
+func (p providerGRPCPlugin) GRPCClient(_ context.Context, _ *plugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {
+	if p.protocolVersion == 5 {
 		return &providerGRPCClientV5{
-			grpcClient: tfplugin5.NewProviderClient(c),
+			providerGRPCClient: &providerGRPCClient[*tfplugin5.GetProviderSchema_Request, *tfplugin5.GetProviderSchema_Response]{
+				grpcClient: v5SchemaClient{client: tfplugin5.NewProviderClient(c)},
+			},
 		}, nil
 	}
 	return &providerGRPCClientV6{
-		grpcClient: tfplugin6.NewProviderClient(c),
+		providerGRPCClient: &providerGRPCClient[*tfplugin6.GetProviderSchema_Request, *tfplugin6.GetProviderSchema_Response]{
+			grpcClient: v6SchemaClient{client: tfplugin6.NewProviderClient(c)},
+		},
 	}, nil
 }
 
 // GRPCServer is not implemented as we're only acting as a client
-func (p ProviderGRPCPlugin) GRPCServer(*plugin.GRPCBroker, *grpc.Server) error {
-	return fmt.Errorf("provider plugin only supports client mode")
+func (p providerGRPCPlugin) GRPCServer(*plugin.GRPCBroker, *grpc.Server) error {
+	return ErrNotImplemented
+}
+
+// schemaClient defines the interface for clients that can retrieve schemas.
+// Required as the v5 and v6 clients have different method signatures.
+type schemaClient[TReq, TResp any] interface {
+	getSchema(ctx context.Context, req TReq, opts ...grpc.CallOption) (TResp, error)
+}
+
+// v5SchemaClient adapts tfplugin5.ProviderClient to the schemaClient interface.
+type v5SchemaClient struct {
+	client tfplugin5.ProviderClient
+}
+
+// getSchema calls GetSchema on the V5 client and implements the schemaClient interface.
+func (c v5SchemaClient) getSchema(ctx context.Context, req *tfplugin5.GetProviderSchema_Request, opts ...grpc.CallOption) (*tfplugin5.GetProviderSchema_Response, error) {
+	return c.client.GetSchema(ctx, req, opts...)
+}
+
+// v6SchemaClient adapts tfplugin6.ProviderClient to the schemaClient interface.
+type v6SchemaClient struct {
+	client tfplugin6.ProviderClient
+}
+
+// getSchema calls GetProviderSchema on the V6 client and implements the schemaClient interface.
+func (c v6SchemaClient) getSchema(ctx context.Context, req *tfplugin6.GetProviderSchema_Request, opts ...grpc.CallOption) (*tfplugin6.GetProviderSchema_Response, error) {
+	return c.client.GetProviderSchema(ctx, req, opts...)
+}
+
+// providerGRPCClient is a generic wrapper for gRPC clients
+type providerGRPCClient[TReq, TResp any] struct {
+	grpcClient schemaClient[TReq, TResp]
+}
+
+// Schema calls GetSchema on the provider and returns the protobuf response
+func (c *providerGRPCClient[TReq, TResp]) Schema(req TReq) (TResp, error) {
+	var zeroResp TResp
+	protoResp, err := c.grpcClient.getSchema(context.Background(), req)
+	if err != nil {
+		return zeroResp, fmt.Errorf("failed to get provider schema: %w", err)
+	}
+	return protoResp, nil
 }
 
 // providerGRPCClientV5 wraps the gRPC client for protocol v5
 type providerGRPCClientV5 struct {
-	grpcClient tfplugin5.ProviderClient
+	*providerGRPCClient[*tfplugin5.GetProviderSchema_Request, *tfplugin5.GetProviderSchema_Response]
 }
 
-// V5Schema calls GetSchema on the provider and returns the protobuf response
-func (c *providerGRPCClientV5) V5Schema(req *tfprotov5.GetProviderSchemaRequest) (*tfplugin5.GetProviderSchema_Response, error) {
+// v5Schema calls GetSchema on the provider and returns the protobuf response
+func (c *providerGRPCClientV5) v5Schema() (*tfplugin5.GetProviderSchema_Response, error) {
 	protoReq := &tfplugin5.GetProviderSchema_Request{} // Empty request
-	protoResp, err := c.grpcClient.GetSchema(context.Background(), protoReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get provider schema: %w", err)
-	}
-	return protoResp, nil
+	return c.Schema(protoReq)
 }
 
 // providerGRPCClientV6 wraps the gRPC client for protocol v6
 type providerGRPCClientV6 struct {
-	grpcClient tfplugin6.ProviderClient
+	*providerGRPCClient[*tfplugin6.GetProviderSchema_Request, *tfplugin6.GetProviderSchema_Response]
 }
 
-// V6Schema calls GetProviderSchema on the provider and returns the protobuf response
-func (c *providerGRPCClientV6) V6Schema(req *tfprotov6.GetProviderSchemaRequest) (*tfplugin6.GetProviderSchema_Response, error) {
+// v6Schema calls GetProviderSchema on the provider and returns the protobuf response
+func (c *providerGRPCClientV6) v6Schema() (*tfplugin6.GetProviderSchema_Response, error) {
 	protoReq := &tfplugin6.GetProviderSchema_Request{} // Empty request
-	protoResp, err := c.grpcClient.GetProviderSchema(context.Background(), protoReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get provider schema: %w", err)
-	}
-	return protoResp, nil
+	return c.Schema(protoReq)
 }
 
-// V5Provider is the interface for v5 protocol clients
-type V5Provider interface {
-	V5Schema(*tfprotov5.GetProviderSchemaRequest) (*tfplugin5.GetProviderSchema_Response, error)
+// universalProvider provides a unified interface that works with both V5 and V6 protocols
+type universalProvider interface {
+	v5Schema() (*tfplugin5.GetProviderSchema_Response, error)
+	v6Schema() (*tfplugin6.GetProviderSchema_Response, error)
+	close()
 }
 
-// V6Provider is the interface for v6 protocol clients
-type V6Provider interface {
-	V6Schema(*tfprotov6.GetProviderSchemaRequest) (*tfplugin6.GetProviderSchema_Response, error)
-}
-
-type ProviderSchemaProvider[S any, F any] interface {
-	GetDataSourceSchemas() map[string]*S
-	GetResourceSchemas() map[string]*F
-	GetProvider() *S
-	GetEphemeralResourceSchemas() map[string]*S
-	GetFunctions() map[string]*F
-}
-
-type ProviderSchemaProviderV5 interface {
-	ProviderSchemaProvider[tfplugin5.Schema, tfplugin5.Function]
-}
-
-type ProviderSchemaProviderV6 interface {
-	ProviderSchemaProvider[tfplugin6.Schema, tfplugin6.Function]
-}
-
-// NewClientV5 creates a new provider client for protocol v5
-func NewClientV5(providerPath string) (V5Provider, func(), error) {
-	// Create the plugin client
-	return newClient[V5Provider](providerPath, 5)
-}
-
-// NewClientV6 creates a new provider client for protocol v6
-func NewClientV6(providerPath string) (V6Provider, func(), error) {
-	// Create the plugin client
-	return newClient[V6Provider](providerPath, 6)
-}
-
-func newClient[T any](providerPath string, protocolVersion int) (T, func(), error) {
-	var ret T
-
+// newGrpcClient creates a provider client that supports both V5 and V6 protocols.
+func newGrpcClient(providerPath string) (universalProvider, error) {
+	// No need for ProtocolVersion here as we are using VersionedPlugins
 	handshakeConfig := plugin.HandshakeConfig{
-		ProtocolVersion:  uint(protocolVersion),
-		MagicCookieKey:   MagicCookieKey,
-		MagicCookieValue: MagicCookieValue,
+		MagicCookieKey:   magicCookieKey,
+		MagicCookieValue: magicCookieValue,
 	}
 
 	client := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig: handshakeConfig,
-		Plugins: map[string]plugin.Plugin{
-			ProviderPluginName: ProviderGRPCPlugin{ProtocolVersion: protocolVersion},
+		VersionedPlugins: map[int]plugin.PluginSet{
+			5: {providerPluginName: providerGRPCPlugin{protocolVersion: 5}},
+			6: {providerPluginName: providerGRPCPlugin{protocolVersion: 6}},
 		},
 		Cmd:              exec.Command(providerPath),
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
@@ -135,22 +148,60 @@ func newClient[T any](providerPath string, protocolVersion int) (T, func(), erro
 	rpcClient, err := client.Client()
 	if err != nil {
 		client.Kill()
-		return ret, nil, fmt.Errorf("failed to create RPC client: %w", err)
+		return nil, fmt.Errorf("failed to create RPC client: %w", err)
 	}
 
 	// Request the plugin
-	raw, err := rpcClient.Dispense(ProviderPluginName)
+	raw, err := rpcClient.Dispense(providerPluginName)
 	if err != nil {
 		client.Kill()
-		return ret, nil, fmt.Errorf("failed to dispense provider: %w", err)
+		return nil, fmt.Errorf("failed to dispense provider: %w", err)
 	}
 
-	// Cast to our interface
-	provider, ok := raw.(T)
-	if !ok {
-		client.Kill()
-		return ret, nil, fmt.Errorf("plugin does not implement %T interface", ret)
+	// The plugin framework will return either a V5 or V6 client based on negotiation
+	// We need to wrap it in a universal client that supports both interfaces
+	if v5Client, ok := raw.(*providerGRPCClientV5); ok {
+		return &universalProviderClient{
+			v5:        v5Client,
+			closeFunc: client.Kill,
+		}, nil
+	}
+	if v6Client, ok := raw.(*providerGRPCClientV6); ok {
+		return &universalProviderClient{
+			v6:        v6Client,
+			closeFunc: client.Kill,
+		}, nil
 	}
 
-	return provider, client.Kill, nil
+	client.Kill()
+	return nil, fmt.Errorf("plugin returned unexpected type: %T", raw)
+}
+
+// universalProviderClient implements UniversalProvider and wraps either V5 or V6 clients
+type universalProviderClient struct {
+	v5        *providerGRPCClientV5
+	v6        *providerGRPCClientV6
+	closeFunc func()
+}
+
+func (c *universalProviderClient) v5Schema() (*tfplugin5.GetProviderSchema_Response, error) {
+	if c.v5 != nil {
+		return c.v5.v5Schema()
+	}
+	return nil, fmt.Errorf("V5 protocol not supported by this provider")
+}
+
+func (c *universalProviderClient) v6Schema() (*tfplugin6.GetProviderSchema_Response, error) {
+	if c.v6 != nil {
+		return c.v6.v6Schema()
+	}
+	return nil, fmt.Errorf("V6 protocol not supported by this provider")
+}
+
+func (c *universalProviderClient) close() {
+	if c.closeFunc != nil {
+		c.closeFunc()
+	}
+	c.v5 = nil
+	c.v6 = nil
 }

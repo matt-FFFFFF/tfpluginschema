@@ -1,7 +1,6 @@
 package tfpluginschema
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 
@@ -10,7 +9,7 @@ import (
 )
 
 func TestServer_AzAPI(t *testing.T) {
-	s := NewServer()
+	s := NewServer(nil)
 	defer s.Cleanup()
 
 	request := Request{
@@ -21,16 +20,10 @@ func TestServer_AzAPI(t *testing.T) {
 
 	// Download and extract the provider
 	require.NoError(t, s.Get(request))
-	assert.Len(t, s.downloadCache, 1)
+	assert.Len(t, s.dlc, 1)
 
-	// Create a universal client
-	client, err := s.GetUniversalClient(request)
-	require.NoError(t, err)
-	require.NotNil(t, client)
-	defer client.Close()
-
-	// Call GetProviderSchema
-	schemaJSON, err := client.GetProviderSchema(context.Background())
+	// Get schema
+	schemaJSON, err := s.getSchema(request)
 	require.NoError(t, err)
 	require.NotNil(t, schemaJSON)
 
@@ -61,10 +54,15 @@ func TestServer_AzAPI(t *testing.T) {
 	for name := range dataSourceSchemas {
 		t.Logf("Data source: %s", name)
 	}
+
+	azapiResource, err := s.GetResourceSchema(request, "azapi_resource")
+	require.NoError(t, err)
+	require.NotNil(t, azapiResource)
+	t.Logf("azapi_resource schema: %s", string(azapiResource))
 }
 
 func TestServer_AzureRM(t *testing.T) {
-	s := NewServer()
+	s := NewServer(nil)
 	defer s.Cleanup()
 
 	request := Request{
@@ -75,16 +73,10 @@ func TestServer_AzureRM(t *testing.T) {
 
 	// Download and extract the provider
 	require.NoError(t, s.Get(request))
-	assert.Len(t, s.downloadCache, 1)
+	assert.Len(t, s.dlc, 1)
 
-	// Create a universal client
-	client, err := s.GetUniversalClient(request)
-	require.NoError(t, err)
-	require.NotNil(t, client)
-	defer client.Close()
-
-	// Call GetProviderSchema
-	schemaJSON, err := client.GetProviderSchema(context.Background())
+	// Get schema
+	schemaJSON, err := s.getSchema(request)
 	require.NoError(t, err)
 	require.NotNil(t, schemaJSON)
 

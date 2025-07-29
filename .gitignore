@@ -34,10 +34,6 @@ go.work.sum
 ehthumbs.db
 Thumbs.db
 
-# Generated protobuf files (since they can be regenerated with go generate)
-*.pb.go
-*_grpc.pb.go
-
 # Temporary files
 *.tmp
 *.temp
