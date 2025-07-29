@@ -10,7 +10,7 @@ A Go library for downloading and retrieving schemas from Terraform/OpenTofu prov
 
 - **Multi-protocol support**: Works with both Terraform Plugin Protocol v5 and v6
 - **Automatic provider download**: Downloads and extracts providers from the OpenTofu registry
-- **Schema retrieval**: Get complete schemas or individual resource/data source/function schemas
+- **Schema retrieval**: Get complete schemas or individual resource/data source/function/ephemeral schemas
 - **Caching**: Built-in caching for both downloads and schemas
 - **Cross-platform**: Supports multiple operating systems and architectures
 
@@ -40,8 +40,8 @@ func main() {
     // Define a provider request
     request := tfpluginschema.Request{
         Namespace: "hashicorp",
-        Name:      "aws",
-        Version:   "5.0.0",
+        Name:      "azurerm",
+        Version:   "4.36.0",
     }
 
     // Download the provider (optional - automatically done when getting schema)

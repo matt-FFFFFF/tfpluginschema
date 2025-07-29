@@ -6,10 +6,11 @@ import (
 )
 
 type schemaResponse struct {
-	Provider          map[string]any `json:"provider"`
-	ResourceSchemas   map[string]any `json:"resource_schemas"`
-	DataSourceSchemas map[string]any `json:"data_source_schemas"`
-	Functions         map[string]any `json:"functions"`
+	Provider                 map[string]any `json:"provider"`
+	ResourceSchemas          map[string]any `json:"resource_schemas,omitempty"`
+	EphemeralResourceSchemas map[string]any `json:"ephemeral_resource_schemas,omitempty"`
+	DataSourceSchemas        map[string]any `json:"data_source_schemas,omitempty"`
+	Functions                map[string]any `json:"functions,omitempty"`
 }
 
 // MarshalJSON implements custom JSON marshaling for schemaResponse.
@@ -17,10 +18,11 @@ type schemaResponse struct {
 func (s schemaResponse) MarshalJSON() ([]byte, error) {
 	// Create a copy of the struct with decoded type fields
 	decoded := map[string]any{
-		"provider":            decodeTypeFields(s.Provider),
-		"resource_schemas":    decodeTypeFields(s.ResourceSchemas),
-		"data_source_schemas": decodeTypeFields(s.DataSourceSchemas),
-		"functions":           decodeTypeFields(s.Functions),
+		"provider":                   decodeTypeFields(s.Provider),
+		"resource_schemas":           decodeTypeFields(s.ResourceSchemas),
+		"ephemeral_resource_schemas": decodeTypeFields(s.EphemeralResourceSchemas),
+		"data_source_schemas":        decodeTypeFields(s.DataSourceSchemas),
+		"functions":                  decodeTypeFields(s.Functions),
 	}
 
 	return json.Marshal(decoded)

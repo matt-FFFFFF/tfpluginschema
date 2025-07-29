@@ -24,6 +24,9 @@ var (
 	ErrPluginApi      = fmt.Errorf("plugin API error")
 )
 
+// ContextKey is a type used to store the server instance in the context.
+type ContextKey struct{}
+
 // Request is a request structure used to specify the details of a plugin
 // so that it can be downloaded.
 type Request struct {
@@ -329,4 +332,25 @@ func (s *Server) GetFunctionSchema(request Request, function string) ([]byte, er
 	// Apply type field decoding to the individual function schema
 	decodedFunction := decodeTypeFields(schemaFunction)
 	return json.MarshalIndent(decodedFunction, "", "  ")
+}
+
+// GetEphemeralResourceSchema retrieves the schema for a specific ephemeral resource from the provider.
+func (s *Server) GetEphemeralResourceSchema(request Request, ephemeralResource string) ([]byte, error) {
+	s.l.Info("Getting ephemeral resource schema", "request", request, "ephemeral_resource", ephemeralResource)
+	schemaResp, ok := s.sc[request]
+	if !ok {
+		if _, err := s.getSchema(request); err != nil {
+			return nil, fmt.Errorf("failed to read provider schema: %w", err)
+		}
+		schemaResp = s.sc[request]
+	}
+
+	schemaResource, ok := schemaResp.EphemeralResourceSchemas[ephemeralResource]
+	if !ok {
+		return nil, fmt.Errorf("ephemeral resource schema not found: %s", ephemeralResource)
+	}
+
+	// Apply type field decoding to the individual ephemeral resource schema
+	decodedResource := decodeTypeFields(schemaResource)
+	return json.MarshalIndent(decodedResource, "", "  ")
 }

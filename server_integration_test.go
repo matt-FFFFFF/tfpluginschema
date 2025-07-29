@@ -35,15 +35,19 @@ func TestServer_AzAPI(t *testing.T) {
 	// Check that we got actual schema data
 	resourceSchemas, hasResources := schemaData["resource_schemas"].(map[string]interface{})
 	dataSourceSchemas, hasDataSources := schemaData["data_source_schemas"].(map[string]interface{})
+	ephemeralResourceSchemas, hasEphemeralResources := schemaData["ephemeral_resource_schemas"].(map[string]interface{})
 
 	require.True(t, hasResources, "Should have resource_schemas field")
 	require.True(t, hasDataSources, "Should have data_source_schemas field")
+	require.True(t, hasEphemeralResources, "Should have ephemeral_resource_schemas field")
 	require.Greater(t, len(resourceSchemas), 0, "Should have resource schemas")
 	require.Greater(t, len(dataSourceSchemas), 0, "Should have data source schemas")
+	require.Greater(t, len(ephemeralResourceSchemas), 0, "Should have ephemeral resource schemas")
 
 	t.Logf("JSON schema size: %d bytes", len(schemaJSON))
 	t.Logf("Number of resource schemas: %d", len(resourceSchemas))
 	t.Logf("Number of data source schemas: %d", len(dataSourceSchemas))
+	t.Logf("Number of ephemeral resource schemas: %d", len(ephemeralResourceSchemas))
 
 	// Log some resource names for verification
 	for name := range resourceSchemas {
@@ -53,6 +57,11 @@ func TestServer_AzAPI(t *testing.T) {
 	// Log some data source names for verification
 	for name := range dataSourceSchemas {
 		t.Logf("Data source: %s", name)
+	}
+
+	// Log some ephemeral resource names for verification
+	for name := range ephemeralResourceSchemas {
+		t.Logf("Ephemeral resource: %s", name)
 	}
 
 	azapiResource, err := s.GetResourceSchema(request, "azapi_resource")
