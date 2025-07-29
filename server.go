@@ -27,9 +27,9 @@ var (
 // Request is a request structure used to specify the details of a plugin
 // so that it can be downloaded.
 type Request struct {
-	Namespace string
-	Name      string
-	Version   string
+	Namespace string // Namespace of the provider (e.g., "Azure")
+	Name      string // Name of the provider (e.g., "azapi")
+	Version   string // Version of the provider (e.g., "2.5.0")
 }
 
 // String returns a string representation of the Request in the format:
