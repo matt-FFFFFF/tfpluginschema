@@ -1,8 +1,10 @@
 package tfpluginschema
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -14,9 +16,9 @@ import (
 )
 
 const (
-	PluginApi              = "https://registry.opentofu.org/v1/providers"
-	ProviderFileNamePrefix = "terraform-provider-"
-	UrlPathSeparator       = '/'
+	pluginApi              = "https://registry.opentofu.org/v1/providers"
+	providerFileNamePrefix = "terraform-provider-"
+	urlPathSeparator       = '/'
 )
 
 var (
@@ -29,6 +31,7 @@ type ContextKey struct{}
 
 // Request is a request structure used to specify the details of a plugin
 // so that it can be downloaded.
+// Note that the request fields are case-sensitive.
 type Request struct {
 	Namespace string // Namespace of the provider (e.g., "Azure")
 	Name      string // Name of the provider (e.g., "azapi")
@@ -36,20 +39,20 @@ type Request struct {
 }
 
 // String returns a string representation of the Request in the format:
-// "https://registry.terraform.io/v1/providers/{namespace}/{name}/{version}/{os}/{arch}"
+// "https://registry.opentofu.org/v1/providers/{namespace}/{name}/{version}/download/{os}/{arch}"
 // This format is used to construct the URL for downloading the plugin.
 func (r Request) String() string {
 	sb := strings.Builder{}
-	sb.WriteString(PluginApi)
-	sb.WriteRune(UrlPathSeparator)
+	sb.WriteString(pluginApi)
+	sb.WriteRune(urlPathSeparator)
 	sb.WriteString(r.Namespace)
-	sb.WriteRune(UrlPathSeparator)
+	sb.WriteRune(urlPathSeparator)
 	sb.WriteString(r.Name)
-	sb.WriteRune(UrlPathSeparator)
+	sb.WriteRune(urlPathSeparator)
 	sb.WriteString(r.Version)
 	sb.WriteString("/download/")
 	sb.WriteString(runtime.GOOS)
-	sb.WriteRune(UrlPathSeparator)
+	sb.WriteRune(urlPathSeparator)
 	sb.WriteString(runtime.GOARCH)
 	result := sb.String()
 	if _, err := url.Parse(result); err != nil {
@@ -77,10 +80,12 @@ type Server struct {
 	l      *slog.Logger
 }
 
+// NewServer creates a new Server instance with an optional logger.
+// If no logger is provided, it defaults to a logger that discards all logs.
 func NewServer(l *slog.Logger) *Server {
 	if l == nil {
-		l = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-			Level:     slog.LevelInfo,
+		l = slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{
+			Level:     slog.LevelError,
 			AddSource: false,
 		}))
 	}
@@ -98,6 +103,11 @@ func (s *Server) Cleanup() {
 	os.RemoveAll(s.tmpDir)
 }
 
+// Get retrieves the plugin for the specified request, downloading it if necessary.
+// The GetXxx methods (GetResourceSchema, GetDataSourceSchema, etc.) will call this method anyway,
+// so it is not necessary to call Get directly unless you want to ensure the plugin is downloaded first.
+// It is stored in a temporary directory and cached for future use.
+// Make sure to call Cleanup() to remove the temporary files.
 func (s *Server) Get(request Request) error {
 	l := s.l.With("request_namespace", request.Namespace, "request_name", request.Name, "request_version", request.Version)
 	if _, exists := s.dlc[request]; exists {
@@ -187,7 +197,7 @@ func (s *Server) Get(request Request) error {
 	}
 
 	// check the extracted directory
-	wantProviderFileName := fmt.Sprintf("%s%s", ProviderFileNamePrefix, request.Name)
+	wantProviderFileName := fmt.Sprintf("%s%s", providerFileNamePrefix, request.Name)
 	if err = fs.WalkDir(os.DirFS(extractDir), ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return fmt.Errorf("error walking extracted directory (%s): %w", extractDir, err)
@@ -218,7 +228,7 @@ func (s *Server) Get(request Request) error {
 	return nil
 }
 
-// GetProviderClient creates a universal provider client for the given request
+// getSchema creates a universal provider client for the given request
 func (s *Server) getSchema(request Request) ([]byte, error) {
 	if resp, exists := s.sc[request]; exists {
 		return json.Marshal(resp)
@@ -289,7 +299,7 @@ func (s *Server) GetResourceSchema(request Request, resource string) ([]byte, er
 
 	// Apply type field decoding to the individual resource schema
 	decodedResource := decodeTypeFields(schemaResource)
-	return json.MarshalIndent(decodedResource, "", "  ")
+	return marshalResponse(decodedResource)
 }
 
 // GetDataSourceSchema retrieves the schema for a specific data source from the provider.
@@ -310,7 +320,7 @@ func (s *Server) GetDataSourceSchema(request Request, dataSource string) ([]byte
 
 	// Apply type field decoding to the individual data source schema
 	decodedResource := decodeTypeFields(schemaResource)
-	return json.MarshalIndent(decodedResource, "", "  ")
+	return marshalResponse(decodedResource)
 }
 
 // GetFunctionSchema retrieves the schema for a specific function from the provider.
@@ -331,7 +341,7 @@ func (s *Server) GetFunctionSchema(request Request, function string) ([]byte, er
 
 	// Apply type field decoding to the individual function schema
 	decodedFunction := decodeTypeFields(schemaFunction)
-	return json.MarshalIndent(decodedFunction, "", "  ")
+	return marshalResponse(decodedFunction)
 }
 
 // GetEphemeralResourceSchema retrieves the schema for a specific ephemeral resource from the provider.
@@ -352,5 +362,33 @@ func (s *Server) GetEphemeralResourceSchema(request Request, ephemeralResource s
 
 	// Apply type field decoding to the individual ephemeral resource schema
 	decodedResource := decodeTypeFields(schemaResource)
-	return json.MarshalIndent(decodedResource, "", "  ")
+	return marshalResponse(decodedResource)
+}
+
+// GetProviderSchema retrieves the schema for the provider configuration.
+func (s *Server) GetProviderSchema(request Request) ([]byte, error) {
+	s.l.Info("Getting provider schema", "request", request)
+	schemaResp, ok := s.sc[request]
+	if !ok {
+		if _, err := s.getSchema(request); err != nil {
+			return nil, fmt.Errorf("failed to read provider schema: %w", err)
+		}
+		schemaResp = s.sc[request]
+	}
+
+	// Apply type field decoding to the provider schema
+	decodedSchema := decodeTypeFields(schemaResp.Provider)
+
+	return marshalResponse(decodedSchema)
+}
+
+// marshalResponse marshals the response into JSON and compacts it for better suitability with LLMs.
+func marshalResponse(resp any) ([]byte, error) {
+	marshalled, err := json.Marshal(resp)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal response: %w", err)
+	}
+	var compacted bytes.Buffer
+	json.Compact(&compacted, marshalled)
+	return compacted.Bytes(), nil
 }

@@ -36,6 +36,8 @@ func TestServer_AzAPI(t *testing.T) {
 	resourceSchemas, hasResources := schemaData["resource_schemas"].(map[string]interface{})
 	dataSourceSchemas, hasDataSources := schemaData["data_source_schemas"].(map[string]interface{})
 	ephemeralResourceSchemas, hasEphemeralResources := schemaData["ephemeral_resource_schemas"].(map[string]interface{})
+	providerSchema := schemaData["provider"].(map[string]interface{})
+	require.NotNil(t, providerSchema, "Should have provider schema")
 
 	require.True(t, hasResources, "Should have resource_schemas field")
 	require.True(t, hasDataSources, "Should have data_source_schemas field")
@@ -68,6 +70,11 @@ func TestServer_AzAPI(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, azapiResource)
 	t.Logf("azapi_resource schema: %s", string(azapiResource))
+
+	providerSchemaJSON, err := s.GetProviderSchema(request)
+	require.NoError(t, err)
+	require.NotNil(t, providerSchemaJSON)
+	t.Logf("Provider schema: %s", string(providerSchemaJSON))
 }
 
 func TestServer_AzureRM(t *testing.T) {
