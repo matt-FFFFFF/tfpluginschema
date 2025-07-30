@@ -94,6 +94,8 @@ type Server struct {
 - `GetResourceSchema(request Request, resource string) ([]byte, error)` - Retrieves schema for a specific resource
 - `GetDataSourceSchema(request Request, dataSource string) ([]byte, error)` - Retrieves schema for a specific data source
 - `GetFunctionSchema(request Request, function string) ([]byte, error)` - Retrieves schema for a specific function
+- `GetEphemeralResourceSchema(request Request, resource string) ([]byte, error)` - Retrieves schema for an ephemeral resource
+- `GetProviderSchema(request Request) ([]byte, error)` - Retrieves the complete provider schema
 - `Cleanup()` - Removes temporary directories and cleans up resources
 
 ## Usage Examples
@@ -242,4 +244,5 @@ Contributions are welcome! Please ensure that:
 
 ## Acknowledgements
 
-Thanks to the OpenTofu community for their contributions and the maintainers of the OpenTofu plugin protocol. This library builds upon their work to provide a seamless experience for Go developers working with Terraform and OpenTofu providers.
+Thanks to the OpenTofu community for their contributions and the maintainers of the OpenTofu plugin protocol.
+This library builds upon their work to provide a seamless experience for Go developers working with Terraform and OpenTofu providers.
