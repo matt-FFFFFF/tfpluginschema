@@ -1,8 +1,8 @@
 package tfpluginschema_test
 
 import (
-	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/matt-FFFFFF/tfpluginschema"
 )
@@ -19,29 +19,18 @@ func ExampleNewServer() {
 		Version:   "2.5.0",
 	}
 
-	bytes, err := s.GetProviderSchema(request)
+	provSchema, err := s.GetProviderSchema(request)
 	if err != nil {
 		panic(err)
 	}
 
-	// Using this type to unmarshal the provider schema for display purposes.
-	// If using this with an MCP server you can just output the JSON bytes directly.
-	type exampleProviderSchema struct {
-		Block struct {
-			Attributes []struct {
-				Name string `json:"name"`
-			} `json:"attributes"`
-		} `json:"block"`
+	attrs := make([]string, 0, len(provSchema.Block.Attributes))
+	for name := range provSchema.Block.Attributes {
+		attrs = append(attrs, name)
 	}
-
-	var schema exampleProviderSchema
-
-	if err := json.Unmarshal(bytes, &schema); err != nil {
-		panic(err)
-	}
-
-	for _, attr := range schema.Block.Attributes {
-		fmt.Printf("Attribute: %s\n", attr.Name)
+	slices.Sort(attrs)
+	for _, name := range attrs {
+		fmt.Printf("Attribute: %s\n", name)
 	}
 
 	// Output:

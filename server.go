@@ -1,8 +1,8 @@
 package tfpluginschema
 
 import (
-	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -12,7 +12,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
+
+	tfjson "github.com/hashicorp/terraform-json"
 )
 
 const (
@@ -70,7 +73,7 @@ type pluginApiResponse struct {
 }
 
 type downloadCache map[Request]string
-type schemaCache map[Request]schemaResponse
+type schemaCache map[Request]*tfjson.ProviderSchema
 
 // Server is a struct that manages the plugin download and caching process.
 type Server struct {
@@ -228,10 +231,194 @@ func (s *Server) Get(request Request) error {
 	return nil
 }
 
+// GetResourceSchema retrieves the schema for a specific resource from the provider.
+func (s *Server) GetResourceSchema(request Request, resource string) (*tfjson.Schema, error) {
+	s.l.Info("Getting resource schema", "request", request, "resource", resource)
+	schemaResp, ok := s.sc[request]
+	if !ok {
+		if _, err := s.getSchema(request); err != nil {
+			return nil, fmt.Errorf("failed to read provider schema: %w", err)
+		}
+		schemaResp = s.sc[request]
+	}
+
+	schemaResource, ok := schemaResp.ResourceSchemas[resource]
+	if !ok {
+		return nil, fmt.Errorf("resource schema not found: %s", resource)
+	}
+
+	return schemaResource, nil
+}
+
+// GetDataSourceSchema retrieves the schema for a specific data source from the provider.
+func (s *Server) GetDataSourceSchema(request Request, dataSource string) (*tfjson.Schema, error) {
+	s.l.Info("Getting data source schema", "request", request, "data_source", dataSource)
+	schemaResp, ok := s.sc[request]
+	if !ok {
+		if _, err := s.getSchema(request); err != nil {
+			return nil, fmt.Errorf("failed to read provider schema: %w", err)
+		}
+		schemaResp = s.sc[request]
+	}
+
+	schemaResource, ok := schemaResp.DataSourceSchemas[dataSource]
+	if !ok {
+		return nil, fmt.Errorf("data source schema not found: %s", dataSource)
+	}
+
+	return schemaResource, nil
+}
+
+// GetFunctionSchema retrieves the schema for a specific function from the provider.
+func (s *Server) GetFunctionSchema(request Request, function string) (*tfjson.FunctionSignature, error) {
+	s.l.Info("Getting function schema", "request", request, "function", function)
+	schemaResp, ok := s.sc[request]
+	if !ok {
+		if _, err := s.getSchema(request); err != nil {
+			return nil, fmt.Errorf("failed to read provider schema: %w", err)
+		}
+		schemaResp = s.sc[request]
+	}
+
+	schemaFunction, ok := schemaResp.Functions[function]
+	if !ok {
+		return nil, fmt.Errorf("function schema not found: %s", function)
+	}
+	return schemaFunction, nil
+}
+
+// GetEphemeralResourceSchema retrieves the schema for a specific ephemeral resource from the provider.
+func (s *Server) GetEphemeralResourceSchema(request Request, ephemeralResource string) (*tfjson.Schema, error) {
+	s.l.Info("Getting ephemeral resource schema", "request", request, "ephemeral_resource", ephemeralResource)
+	schemaResp, ok := s.sc[request]
+	if !ok {
+		if _, err := s.getSchema(request); err != nil {
+			return nil, fmt.Errorf("failed to read provider schema: %w", err)
+		}
+		schemaResp = s.sc[request]
+	}
+
+	schemaResource, ok := schemaResp.EphemeralResourceSchemas[ephemeralResource]
+	if !ok {
+		return nil, fmt.Errorf("ephemeral resource schema not found: %s", ephemeralResource)
+	}
+
+	return schemaResource, nil
+}
+
+// GetProviderSchema retrieves the schema for the provider configuration.
+func (s *Server) GetProviderSchema(request Request) (*tfjson.Schema, error) {
+	s.l.Info("Getting provider schema", "request", request)
+	schemaResp, ok := s.sc[request]
+	if !ok {
+		if _, err := s.getSchema(request); err != nil {
+			return nil, fmt.Errorf("failed to read provider schema: %w", err)
+		}
+		schemaResp = s.sc[request]
+	}
+	return schemaResp.ConfigSchema, nil
+}
+
+// ListResources retrieves the list of resource names from the provider.
+func (s *Server) ListResources(request Request) ([]string, error) {
+	s.l.Info("Listing resources", "request", request)
+	schemaResp, ok := s.sc[request]
+	if !ok {
+		if _, err := s.getSchema(request); err != nil {
+			return nil, fmt.Errorf("failed to read provider schema: %w", err)
+		}
+		schemaResp = s.sc[request]
+	}
+
+	if schemaResp.ResourceSchemas == nil {
+		return nil, nil
+	}
+
+	resources := make([]string, 0, len(schemaResp.ResourceSchemas))
+	for name := range schemaResp.ResourceSchemas {
+		resources = append(resources, name)
+	}
+
+	slices.Sort(resources)
+	return resources, nil
+}
+
+// ListDataSources retrieves the list of data source names from the provider.
+func (s *Server) ListDataSources(request Request) ([]string, error) {
+	s.l.Info("Listing data sources", "request", request)
+	schemaResp, ok := s.sc[request]
+	if !ok {
+		if _, err := s.getSchema(request); err != nil {
+			return nil, fmt.Errorf("failed to read provider schema: %w", err)
+		}
+		schemaResp = s.sc[request]
+	}
+
+	if schemaResp.DataSourceSchemas == nil {
+		return nil, nil
+	}
+
+	dataSources := make([]string, 0, len(schemaResp.DataSourceSchemas))
+	for name := range schemaResp.DataSourceSchemas {
+		dataSources = append(dataSources, name)
+	}
+
+	slices.Sort(dataSources)
+	return dataSources, nil
+}
+
+// ListFunctions retrieves the list of function names from the provider.
+func (s *Server) ListFunctions(request Request) ([]string, error) {
+	s.l.Info("Listing functions", "request", request)
+	schemaResp, ok := s.sc[request]
+	if !ok {
+		if _, err := s.getSchema(request); err != nil {
+			return nil, fmt.Errorf("failed to read provider schema: %w", err)
+		}
+		schemaResp = s.sc[request]
+	}
+
+	if schemaResp.Functions == nil {
+		return nil, nil
+	}
+
+	functions := make([]string, 0, len(schemaResp.Functions))
+	for name := range schemaResp.Functions {
+		functions = append(functions, name)
+	}
+
+	slices.Sort(functions)
+	return functions, nil
+}
+
+// ListEphemeralResources retrieves the list of ephemeral resource names from the provider.
+func (s *Server) ListEphemeralResources(request Request) ([]string, error) {
+	s.l.Info("Listing ephemeral resources", "request", request)
+	schemaResp, ok := s.sc[request]
+	if !ok {
+		if _, err := s.getSchema(request); err != nil {
+			return nil, fmt.Errorf("failed to read provider schema: %w", err)
+		}
+		schemaResp = s.sc[request]
+	}
+
+	if schemaResp.EphemeralResourceSchemas == nil {
+		return nil, nil
+	}
+
+	ephemeralResources := make([]string, 0, len(schemaResp.EphemeralResourceSchemas))
+	for name := range schemaResp.EphemeralResourceSchemas {
+		ephemeralResources = append(ephemeralResources, name)
+	}
+
+	slices.Sort(ephemeralResources)
+	return ephemeralResources, nil
+}
+
 // getSchema creates a universal provider client for the given request
-func (s *Server) getSchema(request Request) ([]byte, error) {
+func (s *Server) getSchema(request Request) (*tfjson.ProviderSchema, error) {
 	if resp, exists := s.sc[request]; exists {
-		return json.Marshal(resp)
+		return resp, nil
 	}
 
 	// Ensure the provider is downloaded
@@ -251,144 +438,17 @@ func (s *Server) getSchema(request Request) ([]byte, error) {
 	}
 	defer client.close()
 
-	var respAny any
-
-	if resp, err := client.v6Schema(); err == nil {
-		respAny = resp
-	}
-
-	if resp, err := client.v5Schema(); err == nil {
-		respAny = resp
-	}
-
-	if respAny == nil {
-		return nil, fmt.Errorf("failed to get provider schema for either V5 or V6 protocols")
-	}
-
-	response, err := json.Marshal(respAny)
+	// Use the unified Schema() method to retrieve a terraform-json ProviderSchema
+	providerSchema, err := client.schema()
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal provider schema response: %w", err)
+		return nil, fmt.Errorf("failed to get provider schema: %w", err)
 	}
 
-	var schemaResp schemaResponse
-	if err := json.Unmarshal(response, &schemaResp); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal provider schema response: %w", err)
+	if providerSchema == nil {
+		return nil, errors.New("provider schema is nil")
 	}
 
-	// Cache the schema response
-	s.sc[request] = schemaResp
-
-	return json.MarshalIndent(schemaResp, "", "  ")
-}
-
-// GetResourceSchema retrieves the schema for a specific resource from the provider.
-func (s *Server) GetResourceSchema(request Request, resource string) ([]byte, error) {
-	s.l.Info("Getting resource schema", "request", request, "resource", resource)
-	schemaResp, ok := s.sc[request]
-	if !ok {
-		if _, err := s.getSchema(request); err != nil {
-			return nil, fmt.Errorf("failed to read provider schema: %w", err)
-		}
-		schemaResp = s.sc[request]
-	}
-
-	schemaResource, ok := schemaResp.ResourceSchemas[resource]
-	if !ok {
-		return nil, fmt.Errorf("resource schema not found: %s", resource)
-	}
-
-	// Apply type field decoding to the individual resource schema
-	decodedResource := decodeTypeFields(schemaResource)
-	return marshalResponse(decodedResource)
-}
-
-// GetDataSourceSchema retrieves the schema for a specific data source from the provider.
-func (s *Server) GetDataSourceSchema(request Request, dataSource string) ([]byte, error) {
-	s.l.Info("Getting data source schema", "request", request, "data_source", dataSource)
-	schemaResp, ok := s.sc[request]
-	if !ok {
-		if _, err := s.getSchema(request); err != nil {
-			return nil, fmt.Errorf("failed to read provider schema: %w", err)
-		}
-		schemaResp = s.sc[request]
-	}
-
-	schemaResource, ok := schemaResp.DataSourceSchemas[dataSource]
-	if !ok {
-		return nil, fmt.Errorf("data source schema not found: %s", dataSource)
-	}
-
-	// Apply type field decoding to the individual data source schema
-	decodedResource := decodeTypeFields(schemaResource)
-	return marshalResponse(decodedResource)
-}
-
-// GetFunctionSchema retrieves the schema for a specific function from the provider.
-func (s *Server) GetFunctionSchema(request Request, function string) ([]byte, error) {
-	s.l.Info("Getting function schema", "request", request, "function", function)
-	schemaResp, ok := s.sc[request]
-	if !ok {
-		if _, err := s.getSchema(request); err != nil {
-			return nil, fmt.Errorf("failed to read provider schema: %w", err)
-		}
-		schemaResp = s.sc[request]
-	}
-
-	schemaFunction, ok := schemaResp.Functions[function]
-	if !ok {
-		return nil, fmt.Errorf("function schema not found: %s", function)
-	}
-
-	// Apply type field decoding to the individual function schema
-	decodedFunction := decodeTypeFields(schemaFunction)
-	return marshalResponse(decodedFunction)
-}
-
-// GetEphemeralResourceSchema retrieves the schema for a specific ephemeral resource from the provider.
-func (s *Server) GetEphemeralResourceSchema(request Request, ephemeralResource string) ([]byte, error) {
-	s.l.Info("Getting ephemeral resource schema", "request", request, "ephemeral_resource", ephemeralResource)
-	schemaResp, ok := s.sc[request]
-	if !ok {
-		if _, err := s.getSchema(request); err != nil {
-			return nil, fmt.Errorf("failed to read provider schema: %w", err)
-		}
-		schemaResp = s.sc[request]
-	}
-
-	schemaResource, ok := schemaResp.EphemeralResourceSchemas[ephemeralResource]
-	if !ok {
-		return nil, fmt.Errorf("ephemeral resource schema not found: %s", ephemeralResource)
-	}
-
-	// Apply type field decoding to the individual ephemeral resource schema
-	decodedResource := decodeTypeFields(schemaResource)
-	return marshalResponse(decodedResource)
-}
-
-// GetProviderSchema retrieves the schema for the provider configuration.
-func (s *Server) GetProviderSchema(request Request) ([]byte, error) {
-	s.l.Info("Getting provider schema", "request", request)
-	schemaResp, ok := s.sc[request]
-	if !ok {
-		if _, err := s.getSchema(request); err != nil {
-			return nil, fmt.Errorf("failed to read provider schema: %w", err)
-		}
-		schemaResp = s.sc[request]
-	}
-
-	// Apply type field decoding to the provider schema
-	decodedSchema := decodeTypeFields(schemaResp.Provider)
-
-	return marshalResponse(decodedSchema)
-}
-
-// marshalResponse marshals the response into JSON and compacts it for better suitability with LLMs.
-func marshalResponse(resp any) ([]byte, error) {
-	marshalled, err := json.Marshal(resp)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal response: %w", err)
-	}
-	var compacted bytes.Buffer
-	json.Compact(&compacted, marshalled)
-	return compacted.Bytes(), nil
+	// cache and return
+	s.sc[request] = providerSchema
+	return s.sc[request], nil
 }
