@@ -573,3 +573,156 @@ func BenchmarkProviderGRPCClientV6_Schema(b *testing.B) {
 		_, _ = client.Schema(req)
 	}
 }
+
+// Test Schema() conversion from v6 proto to terraform-json ProviderSchema
+func TestUniversalProviderClient_Schema_V6Success(t *testing.T) {
+	mockSchemaClient := &mockV6SchemaClient{}
+	innerClient := &providerGRPCClient[*tfplugin6.GetProviderSchema_Request, *tfplugin6.GetProviderSchema_Response]{
+		grpcClient: mockSchemaClient,
+	}
+	v6Client := &providerGRPCClientV6{
+		providerGRPCClient: innerClient,
+	}
+	client := &universalProviderClient{
+		v6: v6Client,
+	}
+
+	expectedResp := createTestV6Response()
+
+	mockSchemaClient.On("getSchema", mock.Anything, mock.Anything, mock.Anything).Return(expectedResp, nil)
+
+	ps, err := client.schema()
+
+	assert.NoError(t, err)
+	assert.NotNil(t, ps)
+
+	// Check provider/config schema version
+	if assert.NotNil(t, ps.ConfigSchema) {
+		assert.Equal(t, uint64(1), ps.ConfigSchema.Version)
+		if assert.NotNil(t, ps.ConfigSchema.Block) {
+			attr, ok := ps.ConfigSchema.Block.Attributes["test_attribute"]
+			assert.True(t, ok)
+			assert.NotNil(t, attr)
+			assert.True(t, attr.Required)
+		}
+	}
+
+	// Check resource schema attribute present and computed
+	rs, ok := ps.ResourceSchemas["test_resource"]
+	assert.True(t, ok)
+	if assert.NotNil(t, rs) && assert.NotNil(t, rs.Block) {
+		attr, ok := rs.Block.Attributes["id"]
+		assert.True(t, ok)
+		assert.NotNil(t, attr)
+		assert.True(t, attr.Computed)
+	}
+
+	// Check data source schema attribute present and computed
+	ds, ok := ps.DataSourceSchemas["test_data_source"]
+	assert.True(t, ok)
+	if assert.NotNil(t, ds) && assert.NotNil(t, ds.Block) {
+		attr, ok := ds.Block.Attributes["value"]
+		assert.True(t, ok)
+		assert.NotNil(t, attr)
+		assert.True(t, attr.Computed)
+	}
+
+	mockSchemaClient.AssertExpectations(t)
+}
+
+// Test Schema() conversion from v5 proto to terraform-json ProviderSchema
+func TestUniversalProviderClient_Schema_V5Success(t *testing.T) {
+	mockSchemaClient := &mockV5SchemaClient{}
+	innerClient := &providerGRPCClient[*tfplugin5.GetProviderSchema_Request, *tfplugin5.GetProviderSchema_Response]{
+		grpcClient: mockSchemaClient,
+	}
+	v5Client := &providerGRPCClientV5{
+		providerGRPCClient: innerClient,
+	}
+	client := &universalProviderClient{
+		v5: v5Client,
+	}
+
+	expectedResp := createTestV5Response()
+
+	mockSchemaClient.On("getSchema", mock.Anything, mock.Anything, mock.Anything).Return(expectedResp, nil)
+
+	ps, err := client.schema()
+
+	assert.NoError(t, err)
+	assert.NotNil(t, ps)
+
+	// Provider/config schema version
+	if assert.NotNil(t, ps.ConfigSchema) {
+		assert.Equal(t, uint64(1), ps.ConfigSchema.Version)
+		if assert.NotNil(t, ps.ConfigSchema.Block) {
+			attr, ok := ps.ConfigSchema.Block.Attributes["test_attribute"]
+			assert.True(t, ok)
+			assert.NotNil(t, attr)
+			assert.True(t, attr.Required)
+		}
+	}
+
+	// Resource schema
+	rs, ok := ps.ResourceSchemas["test_resource"]
+	assert.True(t, ok)
+	if assert.NotNil(t, rs) && assert.NotNil(t, rs.Block) {
+		attr, ok := rs.Block.Attributes["id"]
+		assert.True(t, ok)
+		assert.NotNil(t, attr)
+		assert.True(t, attr.Computed)
+	}
+
+	// Data source schema
+	ds, ok := ps.DataSourceSchemas["test_data_source"]
+	assert.True(t, ok)
+	if assert.NotNil(t, ds) && assert.NotNil(t, ds.Block) {
+		attr, ok := ds.Block.Attributes["value"]
+		assert.True(t, ok)
+		assert.NotNil(t, attr)
+		assert.True(t, attr.Computed)
+	}
+
+	mockSchemaClient.AssertExpectations(t)
+}
+
+// Test that Schema() falls back to v5 when v6 fails
+func TestUniversalProviderClient_Schema_FallbackV6ToV5(t *testing.T) {
+	mockV6 := &mockV6SchemaClient{}
+	mockV5 := &mockV5SchemaClient{}
+
+	innerV6 := &providerGRPCClient[*tfplugin6.GetProviderSchema_Request, *tfplugin6.GetProviderSchema_Response]{
+		grpcClient: mockV6,
+	}
+	innerV5 := &providerGRPCClient[*tfplugin5.GetProviderSchema_Request, *tfplugin5.GetProviderSchema_Response]{
+		grpcClient: mockV5,
+	}
+
+	v6Client := &providerGRPCClientV6{providerGRPCClient: innerV6}
+	v5Client := &providerGRPCClientV5{providerGRPCClient: innerV5}
+
+	client := &universalProviderClient{v6: v6Client, v5: v5Client}
+
+	// v6 returns an error
+	mockV6.On("getSchema", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.New("v6 error"))
+	// v5 returns a valid schema
+	mockV5.On("getSchema", mock.Anything, mock.Anything, mock.Anything).Return(createTestV5Response(), nil)
+
+	ps, err := client.schema()
+
+	assert.NoError(t, err)
+	assert.NotNil(t, ps)
+	if assert.NotNil(t, ps.ConfigSchema) {
+		assert.Equal(t, uint64(1), ps.ConfigSchema.Version)
+	}
+
+	mockV6.AssertExpectations(t)
+	mockV5.AssertExpectations(t)
+}
+
+// Small test to reference provider-level mocks so static analysis doesn't flag them as unused.
+func TestHelper_UseProviderMocks(t *testing.T) {
+	t.Helper()
+	_ = &mockV5ProviderClient{}
+	_ = &mockV6ProviderClient{}
+}

@@ -33,13 +33,30 @@ func unzipFile(f *zip.File, destination string) error {
 
 	path := filepath.Join(destination, f.Name)
 	if f.FileInfo().IsDir() {
-		if err := os.MkdirAll(path, f.Mode()); err != nil {
+		// Use a sane default permission for directories
+		if err := os.MkdirAll(path, 0o755); err != nil {
 			return fmt.Errorf("failed to create directory: %w", err)
 		}
 		return nil
 	}
 
-	outFile, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+	// Ensure parent directory exists
+	parentDir := filepath.Dir(path)
+	if err := os.MkdirAll(parentDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create parent directory: %w", err)
+	}
+	// Ensure parent dir is usable even if earlier directory entry had 000 perms
+	if fi, err := os.Stat(parentDir); err == nil {
+		if fi.Mode().Perm()&0o700 == 0 { // no owner perms
+			_ = os.Chmod(parentDir, 0o755)
+		}
+	}
+
+	fperm := f.Mode().Perm()
+	if fperm == 0 {
+		fperm = 0o644
+	}
+	outFile, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fperm)
 	if err != nil {
 		return fmt.Errorf("failed to create file: %w", err)
 	}

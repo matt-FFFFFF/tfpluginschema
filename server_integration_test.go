@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	tfjson "github.com/hashicorp/terraform-json"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -23,30 +24,24 @@ func TestServer_AzAPI(t *testing.T) {
 	assert.Len(t, s.dlc, 1)
 
 	// Get schema
-	schemaJSON, err := s.getSchema(request)
+	schema, err := s.getSchema(request)
 	require.NoError(t, err)
-	require.NotNil(t, schemaJSON)
-
-	// Parse the JSON to verify structure
-	var schemaData map[string]interface{}
-	err = json.Unmarshal(schemaJSON, &schemaData)
-	require.NoError(t, err)
+	require.NotNil(t, schema)
 
 	// Check that we got actual schema data
-	resourceSchemas, hasResources := schemaData["resource_schemas"].(map[string]interface{})
-	dataSourceSchemas, hasDataSources := schemaData["data_source_schemas"].(map[string]interface{})
-	ephemeralResourceSchemas, hasEphemeralResources := schemaData["ephemeral_resource_schemas"].(map[string]interface{})
-	providerSchema := schemaData["provider"].(map[string]interface{})
+	var resourceSchemas map[string]*tfjson.Schema = schema.ResourceSchemas
+	var dataSourceSchemas map[string]*tfjson.Schema = schema.DataSourceSchemas
+	var ephemeralResourceSchemas map[string]*tfjson.Schema = schema.EphemeralResourceSchemas
+	providerSchema := schema.ConfigSchema
 	require.NotNil(t, providerSchema, "Should have provider schema")
 
-	require.True(t, hasResources, "Should have resource_schemas field")
-	require.True(t, hasDataSources, "Should have data_source_schemas field")
-	require.True(t, hasEphemeralResources, "Should have ephemeral_resource_schemas field")
+	require.NotNil(t, resourceSchemas, "Should have resource_schemas field")
+	require.NotNil(t, dataSourceSchemas, "Should have data_source_schemas field")
+	require.NotNil(t, ephemeralResourceSchemas, "Should have ephemeral_resource_schemas field")
 	require.Greater(t, len(resourceSchemas), 0, "Should have resource schemas")
 	require.Greater(t, len(dataSourceSchemas), 0, "Should have data source schemas")
 	require.Greater(t, len(ephemeralResourceSchemas), 0, "Should have ephemeral resource schemas")
 
-	t.Logf("JSON schema size: %d bytes", len(schemaJSON))
 	t.Logf("Number of resource schemas: %d", len(resourceSchemas))
 	t.Logf("Number of data source schemas: %d", len(dataSourceSchemas))
 	t.Logf("Number of ephemeral resource schemas: %d", len(ephemeralResourceSchemas))
@@ -69,12 +64,18 @@ func TestServer_AzAPI(t *testing.T) {
 	azapiResource, err := s.GetResourceSchema(request, "azapi_resource")
 	require.NoError(t, err)
 	require.NotNil(t, azapiResource)
-	t.Logf("azapi_resource schema: %s", string(azapiResource))
-
-	providerSchemaJSON, err := s.GetProviderSchema(request)
+	azapiResourceJson, err := json.Marshal(azapiResource)
 	require.NoError(t, err)
-	require.NotNil(t, providerSchemaJSON)
-	t.Logf("Provider schema: %s", string(providerSchemaJSON))
+	t.Logf("azapi_resource schema: %s", string(azapiResourceJson))
+
+	providerSchema, err = s.GetProviderSchema(request)
+	require.NoError(t, err)
+	require.NotNil(t, providerSchema)
+
+	providerSchemaJson, err := json.Marshal(providerSchema)
+	require.NoError(t, err)
+
+	t.Logf("Provider schema: %s", string(providerSchemaJson))
 }
 
 func TestServer_AzureRM(t *testing.T) {
@@ -92,25 +93,19 @@ func TestServer_AzureRM(t *testing.T) {
 	assert.Len(t, s.dlc, 1)
 
 	// Get schema
-	schemaJSON, err := s.getSchema(request)
+	schema, err := s.getSchema(request)
 	require.NoError(t, err)
-	require.NotNil(t, schemaJSON)
-
-	// Parse the JSON to verify structure
-	var schemaData map[string]interface{}
-	err = json.Unmarshal(schemaJSON, &schemaData)
-	require.NoError(t, err)
+	require.NotNil(t, schema)
 
 	// Check that we got actual schema data
-	resourceSchemas, hasResources := schemaData["resource_schemas"].(map[string]interface{})
-	dataSourceSchemas, hasDataSources := schemaData["data_source_schemas"].(map[string]interface{})
+	resourceSchemas := schema.ResourceSchemas
+	dataSourceSchemas := schema.DataSourceSchemas
 
-	require.True(t, hasResources, "Should have resource_schemas field")
-	require.True(t, hasDataSources, "Should have data_source_schemas field")
+	require.NotNil(t, resourceSchemas, "Should have resource_schemas field")
+	require.NotNil(t, dataSourceSchemas, "Should have data_source_schemas field")
 	require.Greater(t, len(resourceSchemas), 0, "Should have resource schemas")
 	require.Greater(t, len(dataSourceSchemas), 0, "Should have data source schemas")
 
-	t.Logf("JSON schema size: %d bytes", len(schemaJSON))
 	t.Logf("Number of resource schemas: %d", len(resourceSchemas))
 	t.Logf("Number of data source schemas: %d", len(dataSourceSchemas))
 
