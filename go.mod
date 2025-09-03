@@ -1,6 +1,6 @@
 module github.com/matt-FFFFFF/tfpluginschema
 
-go 1.24.5
+go 1.25.0
 
 require (
 	github.com/hashicorp/go-hclog v1.6.3
