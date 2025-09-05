@@ -14,7 +14,9 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 
+	goversion "github.com/hashicorp/go-version"
 	tfjson "github.com/hashicorp/terraform-json"
 )
 
@@ -74,13 +76,16 @@ type pluginApiResponse struct {
 
 type downloadCache map[Request]string
 type schemaCache map[Request]*tfjson.ProviderSchema
+type versionsCache map[VersionsRequest]goversion.Collection
 
 // Server is a struct that manages the plugin download and caching process.
 type Server struct {
-	tmpDir string
-	dlc    downloadCache
-	sc     schemaCache
-	l      *slog.Logger
+	tmpDir    string
+	dlc       downloadCache
+	sc        schemaCache
+	l         *slog.Logger
+	versionsc versionsCache
+	mu        *sync.RWMutex
 }
 
 // NewServer creates a new Server instance with an optional logger.
@@ -94,9 +99,11 @@ func NewServer(l *slog.Logger) *Server {
 	}
 	l.Info("Creating new server instance")
 	return &Server{
-		dlc: make(downloadCache),
-		sc:  make(schemaCache),
-		l:   l,
+		dlc:       make(downloadCache),
+		sc:        make(schemaCache),
+		l:         l,
+		versionsc: make(versionsCache),
+		mu:        &sync.RWMutex{},
 	}
 }
 
@@ -113,10 +120,26 @@ func (s *Server) Cleanup() {
 // Make sure to call Cleanup() to remove the temporary files.
 func (s *Server) Get(request Request) error {
 	l := s.l.With("request_namespace", request.Namespace, "request_name", request.Name, "request_version", request.Version)
+	s.mu.RLock()
 	if _, exists := s.dlc[request]; exists {
 		l.Info("Request already exists in download cache")
+		s.mu.RUnlock()
 		return nil // Request already exists, no need to add again
 	}
+	s.mu.RUnlock()
+
+	if request.Version == "" {
+		ver, err := s.latestVersionOf(request)
+		if err != nil {
+			return fmt.Errorf("failed to get latest version: %w", err)
+		}
+		request.Version = ver
+		l.Info("No version specified, using latest version", "version", request.Version)
+	}
+
+	// Lock for the download and extraction process to avoid multiple downloads of the same plugin
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	registryApiRequest, err := http.NewRequest(http.MethodGet, request.String(), nil)
 	l.Debug("Sending request to registry API", "url", registryApiRequest.URL.String())
@@ -219,11 +242,14 @@ func (s *Server) Get(request Request) error {
 		l.Info("Found provider file", "provider_file_name", d.Name())
 
 		s.dlc[request] = filepath.Join(extractDir, path)
+
 		return fs.SkipAll
 	}); err != nil {
 		return fmt.Errorf("error checking extracted files: %w", err)
 	}
 
+	// At this point we still hold the write lock (deferred Unlock above), so we must NOT
+	// attempt to acquire a read lock again (doing so deadlocks). Just check directly.
 	if _, exists := s.dlc[request]; !exists {
 		return fmt.Errorf("provider file not found in extracted directory (%s) for request: %s", extractDir, request.String())
 	}
@@ -234,12 +260,19 @@ func (s *Server) Get(request Request) error {
 // GetResourceSchema retrieves the schema for a specific resource from the provider.
 func (s *Server) GetResourceSchema(request Request, resource string) (*tfjson.Schema, error) {
 	s.l.Info("Getting resource schema", "request", request, "resource", resource)
+
+	s.mu.RLock()
 	schemaResp, ok := s.sc[request]
+	s.mu.RUnlock()
+
 	if !ok {
 		if _, err := s.getSchema(request); err != nil {
 			return nil, fmt.Errorf("failed to read provider schema: %w", err)
 		}
+
+		s.mu.RLock()
 		schemaResp = s.sc[request]
+		s.mu.RUnlock()
 	}
 
 	schemaResource, ok := schemaResp.ResourceSchemas[resource]
@@ -253,12 +286,18 @@ func (s *Server) GetResourceSchema(request Request, resource string) (*tfjson.Sc
 // GetDataSourceSchema retrieves the schema for a specific data source from the provider.
 func (s *Server) GetDataSourceSchema(request Request, dataSource string) (*tfjson.Schema, error) {
 	s.l.Info("Getting data source schema", "request", request, "data_source", dataSource)
+
+	s.mu.RLock()
 	schemaResp, ok := s.sc[request]
+	s.mu.RUnlock()
+
 	if !ok {
 		if _, err := s.getSchema(request); err != nil {
 			return nil, fmt.Errorf("failed to read provider schema: %w", err)
 		}
+		s.mu.RLock()
 		schemaResp = s.sc[request]
+		s.mu.RUnlock()
 	}
 
 	schemaResource, ok := schemaResp.DataSourceSchemas[dataSource]
@@ -272,12 +311,18 @@ func (s *Server) GetDataSourceSchema(request Request, dataSource string) (*tfjso
 // GetFunctionSchema retrieves the schema for a specific function from the provider.
 func (s *Server) GetFunctionSchema(request Request, function string) (*tfjson.FunctionSignature, error) {
 	s.l.Info("Getting function schema", "request", request, "function", function)
+
+	s.mu.RLock()
 	schemaResp, ok := s.sc[request]
+	s.mu.RUnlock()
+
 	if !ok {
 		if _, err := s.getSchema(request); err != nil {
 			return nil, fmt.Errorf("failed to read provider schema: %w", err)
 		}
+		s.mu.RLock()
 		schemaResp = s.sc[request]
+		s.mu.RUnlock()
 	}
 
 	schemaFunction, ok := schemaResp.Functions[function]
@@ -290,12 +335,18 @@ func (s *Server) GetFunctionSchema(request Request, function string) (*tfjson.Fu
 // GetEphemeralResourceSchema retrieves the schema for a specific ephemeral resource from the provider.
 func (s *Server) GetEphemeralResourceSchema(request Request, ephemeralResource string) (*tfjson.Schema, error) {
 	s.l.Info("Getting ephemeral resource schema", "request", request, "ephemeral_resource", ephemeralResource)
+
+	s.mu.RLock()
 	schemaResp, ok := s.sc[request]
+	s.mu.RUnlock()
+
 	if !ok {
 		if _, err := s.getSchema(request); err != nil {
 			return nil, fmt.Errorf("failed to read provider schema: %w", err)
 		}
+		s.mu.RLock()
 		schemaResp = s.sc[request]
+		s.mu.RUnlock()
 	}
 
 	schemaResource, ok := schemaResp.EphemeralResourceSchemas[ephemeralResource]
@@ -309,12 +360,18 @@ func (s *Server) GetEphemeralResourceSchema(request Request, ephemeralResource s
 // GetProviderSchema retrieves the schema for the provider configuration.
 func (s *Server) GetProviderSchema(request Request) (*tfjson.Schema, error) {
 	s.l.Info("Getting provider schema", "request", request)
+
+	s.mu.RLock()
 	schemaResp, ok := s.sc[request]
+	s.mu.RUnlock()
+
 	if !ok {
 		if _, err := s.getSchema(request); err != nil {
 			return nil, fmt.Errorf("failed to read provider schema: %w", err)
 		}
+		s.mu.RLock()
 		schemaResp = s.sc[request]
+		s.mu.RUnlock()
 	}
 	return schemaResp.ConfigSchema, nil
 }
@@ -322,12 +379,19 @@ func (s *Server) GetProviderSchema(request Request) (*tfjson.Schema, error) {
 // ListResources retrieves the list of resource names from the provider.
 func (s *Server) ListResources(request Request) ([]string, error) {
 	s.l.Info("Listing resources", "request", request)
+
+	s.mu.RLock()
 	schemaResp, ok := s.sc[request]
+	s.mu.RUnlock()
+
 	if !ok {
 		if _, err := s.getSchema(request); err != nil {
 			return nil, fmt.Errorf("failed to read provider schema: %w", err)
 		}
+
+		s.mu.RLock()
 		schemaResp = s.sc[request]
+		s.mu.RUnlock()
 	}
 
 	if schemaResp.ResourceSchemas == nil {
@@ -346,12 +410,19 @@ func (s *Server) ListResources(request Request) ([]string, error) {
 // ListDataSources retrieves the list of data source names from the provider.
 func (s *Server) ListDataSources(request Request) ([]string, error) {
 	s.l.Info("Listing data sources", "request", request)
+
+	s.mu.RLock()
 	schemaResp, ok := s.sc[request]
+	s.mu.RUnlock()
+
 	if !ok {
 		if _, err := s.getSchema(request); err != nil {
 			return nil, fmt.Errorf("failed to read provider schema: %w", err)
 		}
+
+		s.mu.RLock()
 		schemaResp = s.sc[request]
+		s.mu.RUnlock()
 	}
 
 	if schemaResp.DataSourceSchemas == nil {
@@ -370,12 +441,18 @@ func (s *Server) ListDataSources(request Request) ([]string, error) {
 // ListFunctions retrieves the list of function names from the provider.
 func (s *Server) ListFunctions(request Request) ([]string, error) {
 	s.l.Info("Listing functions", "request", request)
+
+	s.mu.RLock()
 	schemaResp, ok := s.sc[request]
+	s.mu.RUnlock()
+
 	if !ok {
 		if _, err := s.getSchema(request); err != nil {
 			return nil, fmt.Errorf("failed to read provider schema: %w", err)
 		}
+		s.mu.RLock()
 		schemaResp = s.sc[request]
+		s.mu.RUnlock()
 	}
 
 	if schemaResp.Functions == nil {
@@ -394,12 +471,18 @@ func (s *Server) ListFunctions(request Request) ([]string, error) {
 // ListEphemeralResources retrieves the list of ephemeral resource names from the provider.
 func (s *Server) ListEphemeralResources(request Request) ([]string, error) {
 	s.l.Info("Listing ephemeral resources", "request", request)
+
+	s.mu.RLock()
 	schemaResp, ok := s.sc[request]
+	s.mu.RUnlock()
+
 	if !ok {
 		if _, err := s.getSchema(request); err != nil {
 			return nil, fmt.Errorf("failed to read provider schema: %w", err)
 		}
+		s.mu.RLock()
 		schemaResp = s.sc[request]
+		s.mu.RUnlock()
 	}
 
 	if schemaResp.EphemeralResourceSchemas == nil {
@@ -417,8 +500,22 @@ func (s *Server) ListEphemeralResources(request Request) ([]string, error) {
 
 // getSchema creates a universal provider client for the given request
 func (s *Server) getSchema(request Request) (*tfjson.ProviderSchema, error) {
+	s.l.Info("Getting provider schema", "request", request)
+
+	s.mu.RLock()
 	if resp, exists := s.sc[request]; exists {
+		s.mu.RUnlock()
 		return resp, nil
+	}
+	s.mu.RUnlock()
+
+	if request.Version == "" {
+		ver, err := s.latestVersionOf(request)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get latest version: %w", err)
+		}
+		request.Version = ver
+		s.l.Info("No version specified, using latest version", "version", request.Version)
 	}
 
 	// Ensure the provider is downloaded
@@ -427,10 +524,13 @@ func (s *Server) getSchema(request Request) (*tfjson.ProviderSchema, error) {
 	}
 
 	// Get the provider path
+	s.mu.RLock()
 	providerPath, exists := s.dlc[request]
 	if !exists {
+		s.mu.RUnlock()
 		return nil, fmt.Errorf("provider not found in cache: %s", request.String())
 	}
+	s.mu.RUnlock()
 
 	client, err := newGrpcClient(providerPath)
 	if err != nil {
@@ -449,6 +549,31 @@ func (s *Server) getSchema(request Request) (*tfjson.ProviderSchema, error) {
 	}
 
 	// cache and return
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.sc[request] = providerSchema
 	return s.sc[request], nil
+}
+
+// latestVersionOf returns the latest version from the provided collection that matches the given constraints.
+func (s *Server) latestVersionOf(request Request) (string, error) {
+	vers, err := s.GetAvailableVersions(VersionsRequest{
+		Namespace: request.Namespace,
+		Name:      request.Name,
+	})
+
+	if err != nil {
+		return "", fmt.Errorf("failed to get available versions: %w", err)
+	}
+
+	if len(vers) == 0 {
+		return "", fmt.Errorf("no available versions found for provider: %s/%s", request.Namespace, request.Name)
+	}
+
+	latest, err := GetLatestVersionMatch(vers, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to get latest version: %w", err)
+	}
+
+	return latest.String(), nil
 }
