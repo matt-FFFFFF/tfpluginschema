@@ -29,9 +29,9 @@ func TestServer_AzAPI(t *testing.T) {
 	require.NotNil(t, schema)
 
 	// Check that we got actual schema data
-	var resourceSchemas map[string]*tfjson.Schema = schema.ResourceSchemas
-	var dataSourceSchemas map[string]*tfjson.Schema = schema.DataSourceSchemas
-	var ephemeralResourceSchemas map[string]*tfjson.Schema = schema.EphemeralResourceSchemas
+	var resourceSchemas = schema.ResourceSchemas
+	var dataSourceSchemas = schema.DataSourceSchemas
+	var ephemeralResourceSchemas = schema.EphemeralResourceSchemas
 	providerSchema := schema.ConfigSchema
 	require.NotNil(t, providerSchema, "Should have provider schema")
 
