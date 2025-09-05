@@ -112,6 +112,15 @@ func (s *Server) Cleanup() {
 // It is stored in a temporary directory and cached for future use.
 // Make sure to call Cleanup() to remove the temporary files.
 func (s *Server) Get(request Request) error {
+	// Resolve version if empty
+	version, err := versionOrLatest(request.Namespace, request.Name, request.Version)
+	if err != nil {
+		return fmt.Errorf("failed to resolve provider version: %w", err)
+	}
+	
+	// Update the request with the resolved version
+	request.Version = version
+	
 	l := s.l.With("request_namespace", request.Namespace, "request_name", request.Name, "request_version", request.Version)
 	if _, exists := s.dlc[request]; exists {
 		l.Info("Request already exists in download cache")
@@ -417,6 +426,15 @@ func (s *Server) ListEphemeralResources(request Request) ([]string, error) {
 
 // getSchema creates a universal provider client for the given request
 func (s *Server) getSchema(request Request) (*tfjson.ProviderSchema, error) {
+	// Resolve version if empty
+	version, err := versionOrLatest(request.Namespace, request.Name, request.Version)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve provider version: %w", err)
+	}
+	
+	// Update the request with the resolved version
+	request.Version = version
+
 	if resp, exists := s.sc[request]; exists {
 		return resp, nil
 	}
