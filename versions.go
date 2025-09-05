@@ -118,9 +118,10 @@ func GetLatestVersionMatch(versions goversion.Collection, constraints goversion.
 
 	var lastGood *goversion.Version
 	for _, v := range versions {
-		if constraints.Check(v) {
-			lastGood = v
+		if !constraints.Check(v) {
+			continue
 		}
+		lastGood = v
 	}
 
 	if lastGood == nil {

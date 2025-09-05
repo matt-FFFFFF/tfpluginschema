@@ -4,10 +4,25 @@ import (
 	"encoding/json"
 	"testing"
 
-	tfjson "github.com/hashicorp/terraform-json"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestServer_GetAvailableVersions(t *testing.T) {
+	s := NewServer(nil)
+	defer s.Cleanup()
+
+	req := VersionsRequest{
+		Namespace: "hashicorp",
+		Name:      "aws",
+	}
+
+	versions, err := s.GetAvailableVersions(req)
+	require.NoError(t, err)
+	require.NotNil(t, versions)
+	require.Greater(t, len(versions), 0, "Should have at least one version")
+	t.Log("Available versions:", versions)
+}
 
 func TestServer_AzAPI(t *testing.T) {
 	s := NewServer(nil)
