@@ -138,9 +138,12 @@ func (s *Server) Cleanup() {
 func (s *Server) Get(request Request) error {
 	l := s.l.With("request_namespace", request.Namespace, "request_name", request.Name, "request_version", request.Version)
 
-	var err error
-	if request, err = request.fixVersion(s); err != nil {
-		return err
+	if !request.fixedVersion() {
+		var err error
+		request, err = request.fixVersion(s)
+		if err != nil {
+			return err
+		}
 	}
 
 	s.mu.RLock()
@@ -275,6 +278,13 @@ func (s *Server) Get(request Request) error {
 func (s *Server) GetResourceSchema(request Request, resource string) (*tfjson.Schema, error) {
 	s.l.Info("Getting resource schema", "request", request, "resource", resource)
 
+	if !request.fixedVersion() {
+		var err error
+		if request, err = request.fixVersion(s); err != nil {
+			return nil, err
+		}
+	}
+
 	s.mu.RLock()
 	schemaResp, ok := s.sc[request]
 	s.mu.RUnlock()
@@ -301,6 +311,13 @@ func (s *Server) GetResourceSchema(request Request, resource string) (*tfjson.Sc
 func (s *Server) GetDataSourceSchema(request Request, dataSource string) (*tfjson.Schema, error) {
 	s.l.Info("Getting data source schema", "request", request, "data_source", dataSource)
 
+	if !request.fixedVersion() {
+		var err error
+		if request, err = request.fixVersion(s); err != nil {
+			return nil, err
+		}
+	}
+
 	s.mu.RLock()
 	schemaResp, ok := s.sc[request]
 	s.mu.RUnlock()
@@ -326,6 +343,13 @@ func (s *Server) GetDataSourceSchema(request Request, dataSource string) (*tfjso
 func (s *Server) GetFunctionSchema(request Request, function string) (*tfjson.FunctionSignature, error) {
 	s.l.Info("Getting function schema", "request", request, "function", function)
 
+	if !request.fixedVersion() {
+		var err error
+		if request, err = request.fixVersion(s); err != nil {
+			return nil, err
+		}
+	}
+
 	s.mu.RLock()
 	schemaResp, ok := s.sc[request]
 	s.mu.RUnlock()
@@ -349,6 +373,13 @@ func (s *Server) GetFunctionSchema(request Request, function string) (*tfjson.Fu
 // GetEphemeralResourceSchema retrieves the schema for a specific ephemeral resource from the provider.
 func (s *Server) GetEphemeralResourceSchema(request Request, ephemeralResource string) (*tfjson.Schema, error) {
 	s.l.Info("Getting ephemeral resource schema", "request", request, "ephemeral_resource", ephemeralResource)
+
+	if !request.fixedVersion() {
+		var err error
+		if request, err = request.fixVersion(s); err != nil {
+			return nil, err
+		}
+	}
 
 	s.mu.RLock()
 	schemaResp, ok := s.sc[request]
@@ -375,6 +406,13 @@ func (s *Server) GetEphemeralResourceSchema(request Request, ephemeralResource s
 func (s *Server) GetProviderSchema(request Request) (*tfjson.Schema, error) {
 	s.l.Info("Getting provider schema", "request", request)
 
+	if !request.fixedVersion() {
+		var err error
+		if request, err = request.fixVersion(s); err != nil {
+			return nil, err
+		}
+	}
+
 	s.mu.RLock()
 	schemaResp, ok := s.sc[request]
 	s.mu.RUnlock()
@@ -393,6 +431,13 @@ func (s *Server) GetProviderSchema(request Request) (*tfjson.Schema, error) {
 // ListResources retrieves the list of resource names from the provider.
 func (s *Server) ListResources(request Request) ([]string, error) {
 	s.l.Info("Listing resources", "request", request)
+
+	if !request.fixedVersion() {
+		var err error
+		if request, err = request.fixVersion(s); err != nil {
+			return nil, err
+		}
+	}
 
 	s.mu.RLock()
 	schemaResp, ok := s.sc[request]
@@ -425,6 +470,13 @@ func (s *Server) ListResources(request Request) ([]string, error) {
 func (s *Server) ListDataSources(request Request) ([]string, error) {
 	s.l.Info("Listing data sources", "request", request)
 
+	if !request.fixedVersion() {
+		var err error
+		if request, err = request.fixVersion(s); err != nil {
+			return nil, err
+		}
+	}
+
 	s.mu.RLock()
 	schemaResp, ok := s.sc[request]
 	s.mu.RUnlock()
@@ -456,6 +508,13 @@ func (s *Server) ListDataSources(request Request) ([]string, error) {
 func (s *Server) ListFunctions(request Request) ([]string, error) {
 	s.l.Info("Listing functions", "request", request)
 
+	if !request.fixedVersion() {
+		var err error
+		if request, err = request.fixVersion(s); err != nil {
+			return nil, err
+		}
+	}
+
 	s.mu.RLock()
 	schemaResp, ok := s.sc[request]
 	s.mu.RUnlock()
@@ -485,6 +544,13 @@ func (s *Server) ListFunctions(request Request) ([]string, error) {
 // ListEphemeralResources retrieves the list of ephemeral resource names from the provider.
 func (s *Server) ListEphemeralResources(request Request) ([]string, error) {
 	s.l.Info("Listing ephemeral resources", "request", request)
+
+	if !request.fixedVersion() {
+		var err error
+		if request, err = request.fixVersion(s); err != nil {
+			return nil, err
+		}
+	}
 
 	s.mu.RLock()
 	schemaResp, ok := s.sc[request]
@@ -516,9 +582,8 @@ func (s *Server) ListEphemeralResources(request Request) ([]string, error) {
 func (s *Server) getSchema(request Request) (*tfjson.ProviderSchema, error) {
 	s.l.Info("Getting provider schema", "request", request)
 
-	var err error
-	if request, err = request.fixVersion(s); err != nil {
-		return nil, err
+	if !request.fixedVersion() {
+		return nil, fmt.Errorf("version must be fixed before getting schema")
 	}
 
 	s.mu.RLock()
