@@ -516,17 +516,17 @@ func (s *Server) ListEphemeralResources(request Request) ([]string, error) {
 func (s *Server) getSchema(request Request) (*tfjson.ProviderSchema, error) {
 	s.l.Info("Getting provider schema", "request", request)
 
+	var err error
+	if request, err = request.fixVersion(s); err != nil {
+		return nil, err
+	}
+
 	s.mu.RLock()
 	if resp, exists := s.sc[request]; exists {
 		s.mu.RUnlock()
 		return resp, nil
 	}
 	s.mu.RUnlock()
-
-	var err error
-	if request, err = request.fixVersion(s); err != nil {
-		return nil, err
-	}
 
 	// Ensure the provider is downloaded
 	if err := s.Get(request); err != nil {
