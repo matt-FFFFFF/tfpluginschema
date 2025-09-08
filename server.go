@@ -137,6 +137,12 @@ func (s *Server) Cleanup() {
 // Make sure to call Cleanup() to remove the temporary files.
 func (s *Server) Get(request Request) error {
 	l := s.l.With("request_namespace", request.Namespace, "request_name", request.Name, "request_version", request.Version)
+
+	var err error
+	if request, err = request.fixVersion(s); err != nil {
+		return err
+	}
+
 	s.mu.RLock()
 	if _, exists := s.dlc[request]; exists {
 		l.Info("Request already exists in download cache")
@@ -144,11 +150,6 @@ func (s *Server) Get(request Request) error {
 		return nil // Request already exists, no need to add again
 	}
 	s.mu.RUnlock()
-
-	var err error
-	if request, err = request.fixVersion(s); err != nil {
-		return err
-	}
 
 	// Lock for the download and extraction process to avoid multiple downloads of the same plugin
 	s.mu.Lock()
