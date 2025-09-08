@@ -40,7 +40,7 @@ type ContextKey struct{}
 type Request struct {
 	Namespace string // Namespace of the provider (e.g., "Azure")
 	Name      string // Name of the provider (e.g., "azapi")
-	Version   string // Version of the provider (e.g., "2.5.0")
+	Version   string // Version of the provider (e.g., "2.5.0") or constraint (e.g., ">=1.0.0", "~>2.1")
 }
 
 // String returns a string representation of the Request in the format:
@@ -64,6 +64,23 @@ func (r Request) String() string {
 		panic(fmt.Sprintf("failed to parse URL: %s, error: %v", result, err))
 	}
 	return result
+}
+
+func (r Request) fixedVersion() bool {
+	_, err := goversion.NewVersion(r.Version)
+	return err == nil
+}
+
+func (r Request) fixVersion(s *Server) (Request, error) {
+	if !r.fixedVersion() {
+		ver, err := s.latestVersionOf(r)
+		if err != nil {
+			return Request{}, fmt.Errorf("failed to get latest version: %w", err)
+		}
+		r.Version = ver
+		s.l.Info("No version specified, using latest version", "version", r.Version)
+	}
+	return r, nil
 }
 
 type pluginApiResponse struct {
@@ -128,13 +145,9 @@ func (s *Server) Get(request Request) error {
 	}
 	s.mu.RUnlock()
 
-	if request.Version == "" {
-		ver, err := s.latestVersionOf(request)
-		if err != nil {
-			return fmt.Errorf("failed to get latest version: %w", err)
-		}
-		request.Version = ver
-		l.Info("No version specified, using latest version", "version", request.Version)
+	var err error
+	if request, err = request.fixVersion(s); err != nil {
+		return err
 	}
 
 	// Lock for the download and extraction process to avoid multiple downloads of the same plugin
@@ -509,13 +522,9 @@ func (s *Server) getSchema(request Request) (*tfjson.ProviderSchema, error) {
 	}
 	s.mu.RUnlock()
 
-	if request.Version == "" {
-		ver, err := s.latestVersionOf(request)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get latest version: %w", err)
-		}
-		request.Version = ver
-		s.l.Info("No version specified, using latest version", "version", request.Version)
+	var err error
+	if request, err = request.fixVersion(s); err != nil {
+		return nil, err
 	}
 
 	// Ensure the provider is downloaded
@@ -570,7 +579,12 @@ func (s *Server) latestVersionOf(request Request) (string, error) {
 		return "", fmt.Errorf("no available versions found for provider: %s/%s", request.Namespace, request.Name)
 	}
 
-	latest, err := GetLatestVersionMatch(vers, nil)
+	var constraints goversion.Constraints
+	if c, err := goversion.NewConstraint(request.Version); err == nil {
+		constraints = c
+	}
+
+	latest, err := GetLatestVersionMatch(vers, constraints)
 	if err != nil {
 		return "", fmt.Errorf("failed to get latest version: %w", err)
 	}
