@@ -141,26 +141,6 @@ func (s *Server) readSchema(request Request) (*tfjson.ProviderSchema, error) {
 		return nil, errors.New("provider schema is nil but no error was returned")
 	}
 
-	if resp.DataSourceSchemas == nil {
-		resp.DataSourceSchemas = make(map[string]*tfjson.Schema)
-	}
-
-	if resp.ResourceSchemas == nil {
-		resp.ResourceSchemas = make(map[string]*tfjson.Schema)
-	}
-
-	if resp.EphemeralResourceSchemas == nil {
-		resp.EphemeralResourceSchemas = make(map[string]*tfjson.Schema)
-	}
-
-	if resp.Functions == nil {
-		resp.Functions = make(map[string]*tfjson.FunctionSignature)
-	}
-
-	if resp.ConfigSchema == nil {
-		resp.ConfigSchema = &tfjson.Schema{}
-	}
-
 	return resp, nil
 }
 
@@ -508,6 +488,28 @@ func (s *Server) getSchema(request Request) (*tfjson.ProviderSchema, error) {
 
 	if providerSchema == nil {
 		return nil, errors.New("provider schema is nil")
+	}
+
+	// Sanitize nil values to avoid nil dereference errors later
+	// (these should ideally never be nil, but just in case).
+	if providerSchema.DataSourceSchemas == nil {
+		providerSchema.DataSourceSchemas = make(map[string]*tfjson.Schema)
+	}
+
+	if providerSchema.ResourceSchemas == nil {
+		providerSchema.ResourceSchemas = make(map[string]*tfjson.Schema)
+	}
+
+	if providerSchema.EphemeralResourceSchemas == nil {
+		providerSchema.EphemeralResourceSchemas = make(map[string]*tfjson.Schema)
+	}
+
+	if providerSchema.Functions == nil {
+		providerSchema.Functions = make(map[string]*tfjson.FunctionSignature)
+	}
+
+	if providerSchema.ConfigSchema == nil {
+		providerSchema.ConfigSchema = &tfjson.Schema{}
 	}
 
 	// cache and return
