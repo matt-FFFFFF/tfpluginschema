@@ -12,7 +12,7 @@ import (
 func TestGetDataSourceSchema_Success(t *testing.T) {
 	s := NewServer(nil)
 	t.Cleanup(s.Cleanup)
-	req := Request{Namespace: "n", Name: "p", Version: "v"}
+	req := Request{Namespace: "n", Name: "p", Version: "1.2.3"}
 	s.sc[req] = &tfjson.ProviderSchema{
 		DataSourceSchemas: map[string]*tfjson.Schema{
 			"ds": {Block: &tfjson.SchemaBlock{}},
@@ -25,7 +25,7 @@ func TestGetDataSourceSchema_Success(t *testing.T) {
 
 func TestGetDataSourceSchema_NotFound(t *testing.T) {
 	s := NewServer(nil)
-	req := Request{Namespace: "n", Name: "p", Version: "v"}
+	req := Request{Namespace: "n", Name: "p", Version: "1.2.3"}
 	s.sc[req] = &tfjson.ProviderSchema{DataSourceSchemas: map[string]*tfjson.Schema{}}
 	got, err := s.GetDataSourceSchema(req, "missing")
 	assert.Nil(t, got)
@@ -36,7 +36,7 @@ func TestGetDataSourceSchema_NotFound(t *testing.T) {
 func TestGetFunctionSchema_Success(t *testing.T) {
 	s := NewServer(nil)
 	t.Cleanup(s.Cleanup)
-	req := Request{Namespace: "n", Name: "p", Version: "v"}
+	req := Request{Namespace: "n", Name: "p", Version: "1.2.3"}
 	s.sc[req] = &tfjson.ProviderSchema{
 		Functions: map[string]*tfjson.FunctionSignature{
 			"fn": {Summary: "ok"},
@@ -50,7 +50,7 @@ func TestGetFunctionSchema_Success(t *testing.T) {
 
 func TestGetFunctionSchema_NotFound(t *testing.T) {
 	s := NewServer(nil)
-	req := Request{Namespace: "n", Name: "p", Version: "v"}
+	req := Request{Namespace: "n", Name: "p", Version: "1.2.3"}
 	s.sc[req] = &tfjson.ProviderSchema{Functions: map[string]*tfjson.FunctionSignature{}}
 	got, err := s.GetFunctionSchema(req, "missing")
 	assert.Nil(t, got)
@@ -61,7 +61,7 @@ func TestGetFunctionSchema_NotFound(t *testing.T) {
 func TestGetEphemeralResourceSchema_Success(t *testing.T) {
 	s := NewServer(nil)
 	t.Cleanup(s.Cleanup)
-	req := Request{Namespace: "n", Name: "p", Version: "v"}
+	req := Request{Namespace: "n", Name: "p", Version: "1.2.3"}
 	s.sc[req] = &tfjson.ProviderSchema{
 		EphemeralResourceSchemas: map[string]*tfjson.Schema{
 			"er": {Block: &tfjson.SchemaBlock{}},
@@ -74,7 +74,7 @@ func TestGetEphemeralResourceSchema_Success(t *testing.T) {
 
 func TestGetEphemeralResourceSchema_NotFound(t *testing.T) {
 	s := NewServer(nil)
-	req := Request{Namespace: "n", Name: "p", Version: "v"}
+	req := Request{Namespace: "n", Name: "p", Version: "1.2.3"}
 	s.sc[req] = &tfjson.ProviderSchema{EphemeralResourceSchemas: map[string]*tfjson.Schema{}}
 	got, err := s.GetEphemeralResourceSchema(req, "missing")
 	assert.Nil(t, got)
@@ -84,7 +84,7 @@ func TestGetEphemeralResourceSchema_NotFound(t *testing.T) {
 
 func TestGetResourceSchema_NotFound(t *testing.T) {
 	s := NewServer(nil)
-	req := Request{Namespace: "n", Name: "p", Version: "v"}
+	req := Request{Namespace: "n", Name: "p", Version: "1.2.3"}
 	s.sc[req] = &tfjson.ProviderSchema{ResourceSchemas: map[string]*tfjson.Schema{}}
 	got, err := s.GetResourceSchema(req, "missing")
 	assert.Nil(t, got)
