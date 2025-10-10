@@ -22,13 +22,14 @@ type pluginApiVersionsResponse struct {
 }
 
 type VersionsRequest struct {
-	Namespace string
-	Name      string
+	Namespace    string       // Namespace of the provider (e.g., "hashicorp")
+	Name         string       // Name of the provider (e.g., "aws")
+	RegistryType RegistryType // Registry to use (defaults to OpenTofu if not specified)
 }
 
 func (v VersionsRequest) String() string {
 	sb := strings.Builder{}
-	sb.WriteString(pluginApi)
+	sb.WriteString(v.RegistryType.BaseURL())
 	sb.WriteRune(urlPathSeparator)
 	sb.WriteString(v.Namespace)
 	sb.WriteRune(urlPathSeparator)
