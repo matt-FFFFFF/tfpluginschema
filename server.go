@@ -26,6 +26,27 @@ const (
 	urlPathSeparator       = '/'
 )
 
+// RegistryType represents the type of provider registry to use.
+type RegistryType string
+
+const (
+	// RegistryTypeOpenTofu represents the OpenTofu registry (default).
+	RegistryTypeOpenTofu RegistryType = "opentofu"
+	// RegistryTypeTerraform represents the Terraform registry.
+	RegistryTypeTerraform RegistryType = "terraform"
+)
+
+// BaseURL returns the base URL for the registry API.
+// It defaults to OpenTofu registry for empty or unknown registry types.
+func (r RegistryType) BaseURL() string {
+	switch r {
+	case RegistryTypeTerraform:
+		return "https://registry.terraform.io/v1/providers"
+	default:
+		return "https://registry.opentofu.org/v1/providers"
+	}
+}
+
 var (
 	ErrPluginNotFound = fmt.Errorf("plugin not found")
 	ErrPluginApi      = fmt.Errorf("plugin API error")
@@ -38,17 +59,19 @@ type ContextKey struct{}
 // so that it can be downloaded.
 // Note that the request fields are case-sensitive.
 type Request struct {
-	Namespace string // Namespace of the provider (e.g., "Azure")
-	Name      string // Name of the provider (e.g., "azapi")
-	Version   string // Version of the provider (e.g., "2.5.0") or constraint (e.g., ">=1.0.0", "~>2.1")
+	Namespace    string       // Namespace of the provider (e.g., "Azure")
+	Name         string       // Name of the provider (e.g., "azapi")
+	Version      string       // Version of the provider (e.g., "2.5.0") or constraint (e.g., ">=1.0.0", "~>2.1")
+	RegistryType RegistryType // Registry to use (defaults to OpenTofu if not specified)
 }
 
 // String returns a string representation of the Request in the format:
-// "https://registry.opentofu.org/v1/providers/{namespace}/{name}/{version}/download/{os}/{arch}"
+// "https://{registry}/v1/providers/{namespace}/{name}/{version}/download/{os}/{arch}"
+// where {registry} is either registry.opentofu.org (default) or registry.terraform.io.
 // This format is used to construct the URL for downloading the plugin.
 func (r Request) String() string {
 	sb := strings.Builder{}
-	sb.WriteString(pluginApi)
+	sb.WriteString(r.RegistryType.BaseURL())
 	sb.WriteRune(urlPathSeparator)
 	sb.WriteString(r.Namespace)
 	sb.WriteRune(urlPathSeparator)
