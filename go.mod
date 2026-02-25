@@ -7,7 +7,8 @@ require (
 	github.com/hashicorp/go-plugin v1.6.3
 	github.com/hashicorp/go-version v1.7.0
 	github.com/hashicorp/terraform-json v0.26.0
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.1
+	github.com/urfave/cli/v3 v3.6.2
 	github.com/zclconf/go-cty v1.16.4
 	google.golang.org/grpc v1.74.2
 	google.golang.org/protobuf v1.36.6
