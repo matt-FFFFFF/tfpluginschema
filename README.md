@@ -213,11 +213,14 @@ on-disk cache is preserved across runs.
 
 ### Provider cache layout
 
-Downloaded providers are extracted into:
+Downloaded providers are extracted into a registry-qualified, namespaced path:
 
 ```
-<cacheDir>/terraform-provider-<name>/<version>/<os>_<arch>/
+<cacheDir>/<registry-host>/<namespace>/terraform-provider-<name>/<version>/<os>_<arch>/
 ```
+
+Including the registry host and namespace avoids collisions between providers
+with the same name and version published by different namespaces or registries.
 
 The default `<cacheDir>` is `os.UserCacheDir()/tfpluginschema` (for example
 `~/.cache/tfpluginschema` on Linux). It can be overridden with:
