@@ -87,10 +87,11 @@ func defaultCacheDir() string {
 }
 
 // cachePathSegment returns a filesystem-safe cache path segment.
-// Empty values are mapped to "default" to keep the cache layout stable.
+// Empty values and traversal-only values are mapped to "default" to keep the
+// cache layout stable.
 func cachePathSegment(value string) string {
 	value = strings.TrimSpace(value)
-	if value == "" {
+	if value == "" || value == "." || value == ".." {
 		return "default"
 	}
 
@@ -109,8 +110,8 @@ func cacheProviderDir(cacheDir string, request Request) string {
 		cacheDir,
 		cachePathSegment(request.RegistryType),
 		cachePathSegment(request.Namespace),
-		providerFileNamePrefix+request.Name,
-		request.Version,
+		providerFileNamePrefix+cachePathSegment(request.Name),
+		cachePathSegment(request.Version),
 		runtime.GOOS+"_"+runtime.GOARCH,
 	)
 }
