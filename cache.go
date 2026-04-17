@@ -101,12 +101,13 @@ func cachePathSegment(value string) string {
 // cacheProviderDir returns the predictable cache directory for a given
 // provider request. The layout is:
 //
-//	<cacheDir>/<namespace>/terraform-provider-<name>/<version>/<os>_<arch>
+//	<cacheDir>/<registry-type>/<namespace>/terraform-provider-<name>/<version>/<os>_<arch>
 //
 // The request version must be a concrete version (not a constraint).
 func cacheProviderDir(cacheDir string, request Request) string {
 	return filepath.Join(
 		cacheDir,
+		cachePathSegment(request.RegistryType),
 		cachePathSegment(request.Namespace),
 		providerFileNamePrefix+request.Name,
 		request.Version,
