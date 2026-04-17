@@ -35,10 +35,14 @@ func TestDefaultCacheDir_FallbackToUserCacheDir(t *testing.T) {
 
 	got := defaultCacheDir()
 	require.NotEmpty(t, got)
-	// Expect the directory name to end in "tfpluginschema" under either the
-	// user cache dir or the temp dir fallback.
-	assert.Equal(t, "tfpluginschema", filepath.Base(got),
-		"default cache dir should end with 'tfpluginschema', got %q", got)
+	// Accept the user cache dir path and the temp-dir fallback path.
+	assert.Contains(
+		t,
+		[]string{"tfpluginschema", "tfpluginschema-cache"},
+		filepath.Base(got),
+		"default cache dir should end with either 'tfpluginschema' or 'tfpluginschema-cache', got %q",
+		got,
+	)
 }
 
 func TestWithCacheDir_OverridesDefault(t *testing.T) {
