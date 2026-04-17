@@ -108,7 +108,7 @@ func cachePathSegment(value string) string {
 func cacheProviderDir(cacheDir string, request Request) string {
 	return filepath.Join(
 		cacheDir,
-		cachePathSegment(request.RegistryType),
+		cachePathSegment(string(request.RegistryType)),
 		cachePathSegment(request.Namespace),
 		providerFileNamePrefix+cachePathSegment(request.Name),
 		cachePathSegment(request.Version),

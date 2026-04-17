@@ -26,30 +26,6 @@ const (
 	urlPathSeparator       = '/'
 )
 
-func validateCachePathComponent(name, value string) error {
-	if value == "" {
-		return fmt.Errorf("%s must not be empty", name)
-	}
-
-	if value == "." || value == ".." {
-		return fmt.Errorf("%s contains invalid path traversal", name)
-	}
-
-	if value != filepath.Base(value) {
-		return fmt.Errorf("%s contains path separators", name)
-	}
-
-	if strings.ContainsRune(value, filepath.Separator) {
-		return fmt.Errorf("%s contains path separators", name)
-	}
-
-	if filepath.Separator != '/' && strings.ContainsRune(value, '/') {
-		return fmt.Errorf("%s contains path separators", name)
-	}
-
-	return nil
-}
-
 func ensureWithinBaseDir(baseDir, targetDir string) error {
 	baseClean := filepath.Clean(baseDir)
 	targetClean := filepath.Clean(targetDir)
@@ -291,7 +267,7 @@ func (s *Server) Get(request Request) error {
 
 	l := s.l.With("request_namespace", request.Namespace, "request_name", request.Name, "request_version", request.Version)
 	var notifyRequest Request
-	var notifyStatus cacheStatus
+	var notifyStatus CacheStatus
 	var shouldNotify bool
 
 	if !request.fixedVersion() {
@@ -310,7 +286,10 @@ func (s *Server) Get(request Request) error {
 	}
 	s.mu.RUnlock()
 
-	// Lock for the download and extraction process to avoid multiple downloads of the same plugin
+	// Lock for the download and extraction process to avoid multiple downloads of the same plugin.
+	// The cache-status callback is captured under the lock and invoked *after*
+	// the lock is released, so user callbacks may safely call back into the
+	// Server without deadlocking.
 	s.mu.Lock()
 	defer func() {
 		s.mu.Unlock()
@@ -326,13 +305,6 @@ func (s *Server) Get(request Request) error {
 		return nil
 	}
 
-	if err := validateCachePathComponent("request name", request.Name); err != nil {
-		return err
-	}
-	if err := validateCachePathComponent("request version", request.Version); err != nil {
-		return err
-	}
-
 	// Check the persistent on-disk cache first (unless force-fetch is set).
 	extractDir := cacheProviderDir(s.cacheDir, request)
 	if err := ensureWithinBaseDir(s.cacheDir, extractDir); err != nil {
@@ -343,13 +315,13 @@ func (s *Server) Get(request Request) error {
 		if path, ok := findProviderBinary(extractDir, request.Name); ok {
 			l.Info("Provider cache hit", "path", path, "cache_dir", s.cacheDir)
 			s.dlc[request] = path
-			s.notifyCacheStatus(request, CacheStatusHit)
+			notifyRequest, notifyStatus, shouldNotify = request, CacheStatusHit, true
 			return nil
 		}
 	}
 
 	l.Info("Provider cache miss, downloading", "cache_dir", s.cacheDir, "force_fetch", s.forceFetch)
-	s.notifyCacheStatus(request, CacheStatusMiss)
+	notifyRequest, notifyStatus, shouldNotify = request, CacheStatusMiss, true
 
 	registryApiRequest, err := http.NewRequest(http.MethodGet, request.String(), nil)
 	l.Debug("Sending request to registry API", "url", registryApiRequest.URL.String())

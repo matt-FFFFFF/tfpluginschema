@@ -61,14 +61,47 @@ func TestWithCacheDir_EmptyIsIgnored(t *testing.T) {
 
 func TestCacheProviderDir_Layout(t *testing.T) {
 	root := "/tmp/root"
-	req := Request{Namespace: "hashicorp", Name: "aws", Version: "1.2.3"}
+	req := Request{
+		Namespace:    "hashicorp",
+		Name:         "aws",
+		Version:      "1.2.3",
+		RegistryType: RegistryTypeOpenTofu,
+	}
 	want := filepath.Join(
 		root,
+		string(RegistryTypeOpenTofu),
+		"hashicorp",
 		"terraform-provider-aws",
 		"1.2.3",
 		runtime.GOOS+"_"+runtime.GOARCH,
 	)
 	assert.Equal(t, want, cacheProviderDir(root, req))
+}
+
+func TestCacheProviderDir_LayoutDefaultsForEmptyFields(t *testing.T) {
+	root := "/tmp/root"
+	req := Request{Name: "aws", Version: "1.2.3"}
+	want := filepath.Join(
+		root,
+		"default", // empty RegistryType
+		"default", // empty Namespace
+		"terraform-provider-aws",
+		"1.2.3",
+		runtime.GOOS+"_"+runtime.GOARCH,
+	)
+	assert.Equal(t, want, cacheProviderDir(root, req))
+}
+
+func TestCacheProviderDir_IsolatesNamespacesAndRegistries(t *testing.T) {
+	root := "/tmp/root"
+	reqA := Request{Namespace: "a", Name: "p", Version: "1", RegistryType: RegistryTypeOpenTofu}
+	reqB := Request{Namespace: "b", Name: "p", Version: "1", RegistryType: RegistryTypeOpenTofu}
+	reqC := Request{Namespace: "a", Name: "p", Version: "1", RegistryType: RegistryTypeTerraform}
+
+	assert.NotEqual(t, cacheProviderDir(root, reqA), cacheProviderDir(root, reqB),
+		"different namespaces must map to different cache dirs")
+	assert.NotEqual(t, cacheProviderDir(root, reqA), cacheProviderDir(root, reqC),
+		"different registry types must map to different cache dirs")
 }
 
 func TestFindProviderBinary_FindsFile(t *testing.T) {
