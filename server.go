@@ -25,17 +25,65 @@ const (
 	urlPathSeparator       = '/'
 )
 
+// ensureWithinBaseDir returns an error if targetDir is not contained within
+// baseDir once both have been lexically cleaned and symlinks in any existing
+// ancestor of targetDir have been resolved. This protects filesystem
+// operations (os.RemoveAll, os.MkdirAll, extraction) against both lexical
+// escapes ("../") and symlink-based escapes where a path segment inside the
+// cache directory points outside of it.
 func ensureWithinBaseDir(baseDir, targetDir string) error {
 	baseClean := filepath.Clean(baseDir)
 	targetClean := filepath.Clean(targetDir)
 
+	// Lexical check first, cheap and deterministic.
 	rel, err := filepath.Rel(baseClean, targetClean)
 	if err != nil {
 		return fmt.Errorf("failed to evaluate cache path: %w", err)
 	}
-
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 		return fmt.Errorf("computed cache path %q escapes cache root %q", targetClean, baseClean)
+	}
+
+	// Resolve symlinks on the base directory (if it exists). If baseDir does
+	// not yet exist, EvalSymlinks returns an error; that's fine — there are
+	// no symlinks to escape through in that case.
+	baseReal, err := filepath.EvalSymlinks(baseClean)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to resolve cache root %q: %w", baseClean, err)
+	}
+
+	// Walk up targetClean to the deepest existing ancestor and resolve
+	// symlinks on it; then confirm containment.
+	existing := targetClean
+	for {
+		if _, err := os.Lstat(existing); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("failed to stat %q: %w", existing, err)
+		}
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			// Reached filesystem root without finding an existing ancestor;
+			// this shouldn't happen because baseReal exists, but be safe.
+			return nil
+		}
+		existing = parent
+	}
+
+	existingReal, err := filepath.EvalSymlinks(existing)
+	if err != nil {
+		return fmt.Errorf("failed to resolve %q: %w", existing, err)
+	}
+
+	rel2, err := filepath.Rel(baseReal, existingReal)
+	if err != nil {
+		return fmt.Errorf("failed to evaluate resolved cache path: %w", err)
+	}
+	if rel2 == ".." || strings.HasPrefix(rel2, ".."+string(filepath.Separator)) || filepath.IsAbs(rel2) {
+		return fmt.Errorf("resolved cache path %q escapes cache root %q (symlink)", existingReal, baseReal)
 	}
 
 	return nil
@@ -255,20 +303,25 @@ func validateCachePathComponent(name, value string, required bool) error {
 	return nil
 }
 
-func (s *Server) validateCacheRequest(request Request) error {
+// validateCacheRequestIdentity validates the request fields that identify the
+// provider (namespace, name). Version is not validated here — it may still be
+// a constraint like "~>2.1" at this point and is validated once resolved by
+// fixVersion.
+func (s *Server) validateCacheRequestIdentity(request Request) error {
 	if err := validateCachePathComponent("namespace", request.Namespace, true); err != nil {
 		return err
 	}
 	if err := validateCachePathComponent("name", request.Name, true); err != nil {
 		return err
 	}
-	// Version may be empty: it is treated as "latest" and resolved by
-	// fixVersion before being used for URL/path construction.
-	if err := validateCachePathComponent("version", request.Version, false); err != nil {
-		return err
-	}
-
 	return nil
+}
+
+// validateCacheRequestVersion validates that a concrete, resolved provider
+// version is safe to use as a URL path and on-disk cache segment. It must be
+// called after fixVersion, never on a user-supplied constraint.
+func (s *Server) validateCacheRequestVersion(request Request) error {
+	return validateCachePathComponent("version", request.Version, true)
 }
 
 // Get retrieves the plugin for the specified request, downloading it if necessary.
@@ -282,7 +335,7 @@ func (s *Server) validateCacheRequest(request Request) error {
 // Cleanup() removes only the Server's in-memory state and any legacy temp
 // directory; the persistent cache is preserved across runs.
 func (s *Server) Get(request Request) error {
-	if err := s.validateCacheRequest(request); err != nil {
+	if err := s.validateCacheRequestIdentity(request); err != nil {
 		return fmt.Errorf("invalid provider request: %w", err)
 	}
 
@@ -297,6 +350,12 @@ func (s *Server) Get(request Request) error {
 		if err != nil {
 			return err
 		}
+	}
+
+	// The (possibly resolved) version is now used for URL/cache-path
+	// construction, so it must be URL/path safe.
+	if err := s.validateCacheRequestVersion(request); err != nil {
+		return fmt.Errorf("invalid provider request: %w", err)
 	}
 
 	s.mu.RLock()
