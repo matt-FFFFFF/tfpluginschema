@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -85,6 +84,9 @@ type Request struct {
 // "https://{registry}/v1/providers/{namespace}/{name}/{version}/download/{os}/{arch}"
 // where {registry} is either registry.opentofu.org (default) or registry.terraform.io.
 // This format is used to construct the URL for downloading the plugin.
+// Note: String is a best-effort representation. Server.Get validates the
+// request's components before constructing the URL, so callers using the
+// public Server API do not need to pre-validate Request fields.
 func (r Request) String() string {
 	sb := strings.Builder{}
 	sb.WriteString(r.RegistryType.BaseURL())
@@ -98,11 +100,7 @@ func (r Request) String() string {
 	sb.WriteString(runtime.GOOS)
 	sb.WriteRune(urlPathSeparator)
 	sb.WriteString(runtime.GOARCH)
-	result := sb.String()
-	if _, err := url.Parse(result); err != nil {
-		panic(fmt.Sprintf("failed to parse URL: %s, error: %v", result, err))
-	}
-	return result
+	return sb.String()
 }
 
 func (r Request) fixedVersion() bool {
@@ -215,8 +213,15 @@ func (s *Server) Cleanup() {
 	os.RemoveAll(tmpDir)
 }
 
-func validateCachePathComponent(name, value string) error {
+// validateCachePathComponent validates a single Request field used both as a
+// URL path segment and as an on-disk cache path segment. When required is
+// true an empty value is rejected; otherwise an empty value is allowed (used
+// for Version, which may be empty to mean "latest").
+func validateCachePathComponent(name, value string, required bool) error {
 	if value == "" {
+		if required {
+			return fmt.Errorf("%s must not be empty", name)
+		}
 		return nil
 	}
 
@@ -228,6 +233,14 @@ func validateCachePathComponent(name, value string) error {
 		return fmt.Errorf("%s must not contain path separators", name)
 	}
 
+	// Reject characters that are unsafe in URL path segments or that would
+	// break url.Parse downstream (whitespace, control chars).
+	for _, r := range value {
+		if r <= 0x20 || r == 0x7f {
+			return fmt.Errorf("%s contains whitespace or control characters", name)
+		}
+	}
+
 	cleaned := filepath.Clean(value)
 	if cleaned != value || cleaned == "." || cleaned == ".." {
 		return fmt.Errorf("%s contains invalid path content", name)
@@ -237,13 +250,15 @@ func validateCachePathComponent(name, value string) error {
 }
 
 func (s *Server) validateCacheRequest(request Request) error {
-	if err := validateCachePathComponent("namespace", request.Namespace); err != nil {
+	if err := validateCachePathComponent("namespace", request.Namespace, true); err != nil {
 		return err
 	}
-	if err := validateCachePathComponent("name", request.Name); err != nil {
+	if err := validateCachePathComponent("name", request.Name, true); err != nil {
 		return err
 	}
-	if err := validateCachePathComponent("version", request.Version); err != nil {
+	// Version may be empty: it is treated as "latest" and resolved by
+	// fixVersion before being used for URL/path construction.
+	if err := validateCachePathComponent("version", request.Version, false); err != nil {
 		return err
 	}
 
@@ -287,14 +302,15 @@ func (s *Server) Get(request Request) error {
 	s.mu.RUnlock()
 
 	// Lock for the download and extraction process to avoid multiple downloads of the same plugin.
-	// The cache-status callback is captured under the lock and invoked *after*
-	// the lock is released, so user callbacks may safely call back into the
-	// Server without deadlocking.
+	// The cache-status callback reference is captured under the lock and
+	// invoked *after* the lock is released, so user callbacks may safely
+	// call back into the Server without deadlocking.
 	s.mu.Lock()
+	var notifyFn CacheStatusFunc
 	defer func() {
 		s.mu.Unlock()
-		if shouldNotify {
-			s.notifyCacheStatus(notifyRequest, notifyStatus)
+		if shouldNotify && notifyFn != nil {
+			s.notifyCacheStatusWith(notifyFn, notifyRequest, notifyStatus)
 		}
 	}()
 
@@ -316,12 +332,14 @@ func (s *Server) Get(request Request) error {
 			l.Info("Provider cache hit", "path", path, "cache_dir", s.cacheDir)
 			s.dlc[request] = path
 			notifyRequest, notifyStatus, shouldNotify = request, CacheStatusHit, true
+			notifyFn = s.cacheStatusFn
 			return nil
 		}
 	}
 
 	l.Info("Provider cache miss, downloading", "cache_dir", s.cacheDir, "force_fetch", s.forceFetch)
 	notifyRequest, notifyStatus, shouldNotify = request, CacheStatusMiss, true
+	notifyFn = s.cacheStatusFn
 
 	registryApiRequest, err := http.NewRequest(http.MethodGet, request.String(), nil)
 	l.Debug("Sending request to registry API", "url", registryApiRequest.URL.String())
@@ -443,10 +461,13 @@ func (s *Server) Get(request Request) error {
 	return nil
 }
 
-// notifyCacheStatus invokes the cacheStatusFn callback, if configured. It
-// swallows panics from user callbacks to avoid breaking the Server.
-func (s *Server) notifyCacheStatus(request Request, status CacheStatus) {
-	if s.cacheStatusFn == nil {
+// notifyCacheStatusWith invokes the provided cache-status callback. The
+// callback reference must be captured under the Server lock and this helper
+// must be called *after* releasing the lock, so user callbacks may safely
+// call back into the Server without deadlocking. Panics from user callbacks
+// are recovered so they do not break the Server.
+func (s *Server) notifyCacheStatusWith(fn CacheStatusFunc, request Request, status CacheStatus) {
+	if fn == nil {
 		return
 	}
 	defer func() {
@@ -454,7 +475,7 @@ func (s *Server) notifyCacheStatus(request Request, status CacheStatus) {
 			s.l.Error("cache status callback panicked", "panic", r)
 		}
 	}()
-	s.cacheStatusFn(request, status)
+	fn(request, status)
 }
 
 // GetResourceSchema retrieves the schema for a specific resource from the provider.
