@@ -120,17 +120,22 @@ type versionsCache map[VersionsRequest]goversion.Collection
 
 // Server is a struct that manages the plugin download and caching process.
 type Server struct {
-	tmpDir    string
-	dlc       downloadCache
-	sc        schemaCache
-	l         *slog.Logger
-	versionsc versionsCache
-	mu        *sync.RWMutex
+	tmpDir        string
+	dlc           downloadCache
+	sc            schemaCache
+	l             *slog.Logger
+	versionsc     versionsCache
+	mu            *sync.RWMutex
+	cacheDir      string
+	forceFetch    bool
+	cacheStatusFn CacheStatusFunc
 }
 
-// NewServer creates a new Server instance with an optional logger.
+// NewServer creates a new Server instance with an optional logger and zero or
+// more ServerOption values for customization (cache directory, force fetch,
+// cache-status callback, ...).
 // If no logger is provided, it defaults to a logger that discards all logs.
-func NewServer(l *slog.Logger) *Server {
+func NewServer(l *slog.Logger, opts ...ServerOption) *Server {
 	if l == nil {
 		l = slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{
 			Level:     slog.LevelError,
@@ -138,13 +143,25 @@ func NewServer(l *slog.Logger) *Server {
 		}))
 	}
 	l.Info("Creating new server instance")
-	return &Server{
+	s := &Server{
 		dlc:       make(downloadCache),
 		sc:        make(schemaCache),
 		l:         l,
 		versionsc: make(versionsCache),
 		mu:        &sync.RWMutex{},
+		cacheDir:  defaultCacheDir(),
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	l.Debug("Server configured", "cache_dir", s.cacheDir, "force_fetch", s.forceFetch)
+	return s
+}
+
+// CacheDir returns the root directory used by the Server to cache downloaded
+// providers.
+func (s *Server) CacheDir() string {
+	return s.cacheDir
 }
 
 func (s *Server) readSchema(request Request) (*tfjson.ProviderSchema, error) {
@@ -176,8 +193,13 @@ func (s *Server) Cleanup() {
 // Get retrieves the plugin for the specified request, downloading it if necessary.
 // The GetXxx methods (GetResourceSchema, GetDataSourceSchema, etc.) will call this method anyway,
 // so it is not necessary to call Get directly unless you want to ensure the plugin is downloaded first.
-// It is stored in a temporary directory and cached for future use.
-// Make sure to call Cleanup() to remove the temporary files.
+//
+// Providers are extracted into a predictable on-disk cache (see CacheDir and
+// the TFPLUGINSCHEMA_CACHE_DIR environment variable). Subsequent calls for the
+// same provider/version/os/arch are served from the cache. Pass
+// WithForceFetch(true) to NewServer to bypass the cache and always download.
+// Cleanup() removes only the Server's in-memory state and any legacy temp
+// directory; the persistent cache is preserved across runs.
 func (s *Server) Get(request Request) error {
 	l := s.l.With("request_namespace", request.Namespace, "request_name", request.Name, "request_version", request.Version)
 
@@ -200,6 +222,27 @@ func (s *Server) Get(request Request) error {
 	// Lock for the download and extraction process to avoid multiple downloads of the same plugin
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Re-check after acquiring the write lock: another goroutine may have
+	// populated the cache between the RUnlock above and Lock here.
+	if _, exists := s.dlc[request]; exists {
+		l.Info("Request already exists in download cache")
+		return nil
+	}
+
+	// Check the persistent on-disk cache first (unless force-fetch is set).
+	extractDir := cacheProviderDir(s.cacheDir, request)
+	if !s.forceFetch {
+		if path, ok := findProviderBinary(extractDir, request.Name); ok {
+			l.Info("Provider cache hit", "path", path, "cache_dir", s.cacheDir)
+			s.dlc[request] = path
+			s.notifyCacheStatus(request, CacheStatusHit)
+			return nil
+		}
+	}
+
+	l.Info("Provider cache miss, downloading", "cache_dir", s.cacheDir, "force_fetch", s.forceFetch)
+	s.notifyCacheStatus(request, CacheStatusMiss)
 
 	registryApiRequest, err := http.NewRequest(http.MethodGet, request.String(), nil)
 	l.Debug("Sending request to registry API", "url", registryApiRequest.URL.String())
@@ -228,17 +271,19 @@ func (s *Server) Get(request Request) error {
 
 	l.Info("Plugin API response received", "arch", pluginResponse.Arch, "os", pluginResponse.OS, "filename", pluginResponse.FileName, "download_url", pluginResponse.DownloadURL)
 
+	downloadURL := pluginResponse.DownloadURL
+	if downloadURL == "" {
+		return fmt.Errorf("download URL is empty for request: %s", request.String())
+	}
+
+	// Create a temp directory for the download so that partial downloads do not
+	// corrupt the persistent cache.
 	if s.tmpDir == "" {
 		tmpFile, err := os.MkdirTemp("", "tfpluginschema-")
 		if err != nil {
 			return fmt.Errorf("failed to create temporary directory: %w", err)
 		}
 		s.tmpDir = tmpFile
-	}
-
-	downloadURL := pluginResponse.DownloadURL
-	if downloadURL == "" {
-		return fmt.Errorf("download URL is empty for request: %s", request.String())
 	}
 
 	downloadRequest, err := http.NewRequest(http.MethodGet, downloadURL, nil)
@@ -270,12 +315,14 @@ func (s *Server) Get(request Request) error {
 		return fmt.Errorf("failed to read plugin data into file: %w", err)
 	}
 
-	// unzip the file
-	extractDir := strings.TrimSuffix(pluginResponse.FileName, filepath.Ext(pluginResponse.FileName)) // Remove extension for directory name
-	extractDir = filepath.Join(s.tmpDir, extractDir)
-
-	if err := os.Mkdir(extractDir, 0755); err != nil {
-		return fmt.Errorf("failed to create extraction directory: %w", err)
+	// Extract into the persistent cache directory. If it already exists (e.g.
+	// from a prior partial run or force-fetch), clear it first so extraction
+	// starts from a known-clean state.
+	if err := os.RemoveAll(extractDir); err != nil {
+		return fmt.Errorf("failed to clear cache directory %s: %w", extractDir, err)
+	}
+	if err := os.MkdirAll(extractDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create cache directory %s: %w", extractDir, err)
 	}
 
 	if err := unzip(pluginFilePath, extractDir); err != nil {
@@ -315,6 +362,20 @@ func (s *Server) Get(request Request) error {
 	}
 
 	return nil
+}
+
+// notifyCacheStatus invokes the cacheStatusFn callback, if configured. It
+// swallows panics from user callbacks to avoid breaking the Server.
+func (s *Server) notifyCacheStatus(request Request, status CacheStatus) {
+	if s.cacheStatusFn == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			s.l.Error("cache status callback panicked", "panic", r)
+		}
+	}()
+	s.cacheStatusFn(request, status)
 }
 
 // GetResourceSchema retrieves the schema for a specific resource from the provider.
