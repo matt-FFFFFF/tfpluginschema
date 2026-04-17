@@ -217,6 +217,13 @@ func (s *Server) Cleanup() {
 // URL path segment and as an on-disk cache path segment. When required is
 // true an empty value is rejected; otherwise an empty value is allowed (used
 // for Version, which may be empty to mean "latest").
+//
+// Values must only contain characters from a conservative URL-safe set:
+// ASCII letters, digits, and the unreserved punctuation "-", "_", ".", "+",
+// "~". This avoids having to URL-escape segments when constructing registry
+// URLs via Request.String(), and rejects characters (like "?", "#", "%",
+// "/", or whitespace) that would change URL semantics or escape the cache
+// root on disk.
 func validateCachePathComponent(name, value string, required bool) error {
 	if value == "" {
 		if required {
@@ -229,15 +236,14 @@ func validateCachePathComponent(name, value string, required bool) error {
 		return fmt.Errorf("%s must not be an absolute path", name)
 	}
 
-	if strings.ContainsRune(value, filepath.Separator) || strings.ContainsRune(value, urlPathSeparator) {
-		return fmt.Errorf("%s must not contain path separators", name)
-	}
-
-	// Reject characters that are unsafe in URL path segments or that would
-	// break url.Parse downstream (whitespace, control chars).
 	for _, r := range value {
-		if r <= 0x20 || r == 0x7f {
-			return fmt.Errorf("%s contains whitespace or control characters", name)
+		switch {
+		case r >= 'A' && r <= 'Z':
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9':
+		case r == '-' || r == '_' || r == '.' || r == '+' || r == '~':
+		default:
+			return fmt.Errorf("%s contains invalid character %q (allowed: letters, digits, '-', '_', '.', '+', '~')", name, r)
 		}
 	}
 

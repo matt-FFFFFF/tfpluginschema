@@ -38,9 +38,11 @@ func (c CacheStatus) String() string {
 }
 
 // CacheStatusFunc is invoked by the Server after resolving a provider request
-// to report whether the provider binary was served from the local cache
-// (CacheStatusHit) or downloaded (CacheStatusMiss). The request passed in has
-// a concrete (fixed) version.
+// to report whether the provider binary was found in the local cache
+// (CacheStatusHit) or was not in the cache and will be downloaded
+// (CacheStatusMiss). The callback is fired before the download completes,
+// so a miss does not imply the download was successful. The request passed
+// in has a concrete (fixed) version.
 type CacheStatusFunc func(request Request, status CacheStatus)
 
 // ServerOption configures a Server at construction time.
@@ -99,6 +101,19 @@ func cachePathSegment(value string) string {
 	return replacer.Replace(value)
 }
 
+// normalizedRegistryType returns the RegistryType to use for cache path
+// construction, treating empty/unknown values the same way BaseURL does —
+// as RegistryTypeOpenTofu. This keeps the cache layout consistent with the
+// actual registry that will be queried.
+func normalizedRegistryType(r RegistryType) RegistryType {
+	switch r {
+	case RegistryTypeTerraform:
+		return RegistryTypeTerraform
+	default:
+		return RegistryTypeOpenTofu
+	}
+}
+
 // cacheProviderDir returns the predictable cache directory for a given
 // provider request. The layout is:
 //
@@ -108,7 +123,7 @@ func cachePathSegment(value string) string {
 func cacheProviderDir(cacheDir string, request Request) string {
 	return filepath.Join(
 		cacheDir,
-		cachePathSegment(string(request.RegistryType)),
+		cachePathSegment(string(normalizedRegistryType(request.RegistryType))),
 		cachePathSegment(request.Namespace),
 		providerFileNamePrefix+cachePathSegment(request.Name),
 		cachePathSegment(request.Version),

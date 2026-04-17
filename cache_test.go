@@ -11,8 +11,8 @@ import (
 )
 
 // writeFakeProviderBinary creates a predictable cache directory layout
-// populated with a fake provider binary. It returns the cache root and the
-// absolute path to the fake binary.
+// populated with a fake provider binary. It returns the absolute path to the
+// fake binary.
 func writeFakeProviderBinary(t *testing.T, cacheRoot string, request Request) string {
 	t.Helper()
 	dir := cacheProviderDir(cacheRoot, request)
@@ -83,7 +83,7 @@ func TestCacheProviderDir_LayoutDefaultsForEmptyFields(t *testing.T) {
 	req := Request{Name: "aws", Version: "1.2.3"}
 	want := filepath.Join(
 		root,
-		"default", // empty RegistryType
+		"opentofu", // empty RegistryType is normalized to OpenTofu
 		"default", // empty Namespace
 		"terraform-provider-aws",
 		"1.2.3",
