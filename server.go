@@ -239,6 +239,41 @@ func (s *Server) Cleanup() {
 	os.RemoveAll(tmpDir)
 }
 
+func validateCachePathComponent(name, value string) error {
+	if value == "" {
+		return nil
+	}
+
+	if filepath.IsAbs(value) {
+		return fmt.Errorf("%s must not be an absolute path", name)
+	}
+
+	if strings.ContainsRune(value, filepath.Separator) || strings.ContainsRune(value, urlPathSeparator) {
+		return fmt.Errorf("%s must not contain path separators", name)
+	}
+
+	cleaned := filepath.Clean(value)
+	if cleaned != value || cleaned == "." || cleaned == ".." {
+		return fmt.Errorf("%s contains invalid path content", name)
+	}
+
+	return nil
+}
+
+func (s *Server) validateCacheRequest(request Request) error {
+	if err := validateCachePathComponent("namespace", request.Namespace); err != nil {
+		return err
+	}
+	if err := validateCachePathComponent("name", request.Name); err != nil {
+		return err
+	}
+	if err := validateCachePathComponent("version", request.Version); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // Get retrieves the plugin for the specified request, downloading it if necessary.
 // The GetXxx methods (GetResourceSchema, GetDataSourceSchema, etc.) will call this method anyway,
 // so it is not necessary to call Get directly unless you want to ensure the plugin is downloaded first.
@@ -250,6 +285,10 @@ func (s *Server) Cleanup() {
 // Cleanup() removes only the Server's in-memory state and any legacy temp
 // directory; the persistent cache is preserved across runs.
 func (s *Server) Get(request Request) error {
+	if err := s.validateCacheRequest(request); err != nil {
+		return fmt.Errorf("invalid provider request: %w", err)
+	}
+
 	l := s.l.With("request_namespace", request.Namespace, "request_name", request.Name, "request_version", request.Version)
 
 	if !request.fixedVersion() {
