@@ -88,7 +88,7 @@ func TestCacheProviderDir_LayoutDefaultsForEmptyFields(t *testing.T) {
 	want := filepath.Join(
 		root,
 		"opentofu", // empty RegistryType is normalized to OpenTofu
-		"default", // empty Namespace
+		"default",  // empty Namespace
 		"terraform-provider-aws",
 		"1.2.3",
 		runtime.GOOS+"_"+runtime.GOARCH,
@@ -201,7 +201,8 @@ func TestServer_Get_CacheHitSkippedByForceFetch(t *testing.T) {
 	)
 	t.Cleanup(s.Cleanup)
 
-	_ = s.Get(req)
+	err = s.Get(req)
+	assert.Error(t, err, "force-fetch should attempt a download; stubbed 404 must surface as an error")
 	assert.Equal(t, 1, called, "cache status callback should fire once")
 	assert.Equal(t, CacheStatusMiss, gotStatus, "force-fetch must report a miss, not a hit")
 }
@@ -242,15 +243,15 @@ func TestNewServer_EnvCacheDirUsedByDefault(t *testing.T) {
 // rewriteHostTransport redirects all outgoing requests to a fixed host/scheme,
 // allowing tests to stub the registry without real network calls.
 type rewriteHostTransport struct {
-host    string
-scheme  string
-wrapped http.RoundTripper
+	host    string
+	scheme  string
+	wrapped http.RoundTripper
 }
 
 func (t *rewriteHostTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-clone := req.Clone(req.Context())
-clone.URL.Host = t.host
-clone.URL.Scheme = t.scheme
-clone.Host = ""
-return t.wrapped.RoundTrip(clone)
+	clone := req.Clone(req.Context())
+	clone.URL.Host = t.host
+	clone.URL.Scheme = t.scheme
+	clone.Host = ""
+	return t.wrapped.RoundTrip(clone)
 }

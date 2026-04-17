@@ -363,7 +363,6 @@ func (s *Server) Get(request Request) error {
 		return fmt.Errorf("invalid provider request: %w", err)
 	}
 
-	l := s.l.With("request_namespace", request.Namespace, "request_name", request.Name, "request_version", request.Version)
 	var notifyRequest Request
 	var notifyStatus CacheStatus
 	var shouldNotify bool
@@ -381,6 +380,11 @@ func (s *Server) Get(request Request) error {
 	if err := s.validateCacheRequestVersion(request); err != nil {
 		return fmt.Errorf("invalid provider request: %w", err)
 	}
+
+	// Build the request-scoped logger *after* fixVersion, so that logs
+	// carry the concrete resolved version rather than the caller-supplied
+	// constraint (e.g. "~>2.1").
+	l := s.l.With("request_namespace", request.Namespace, "request_name", request.Name, "request_version", request.Version)
 
 	s.mu.RLock()
 	if _, exists := s.dlc[request]; exists {
@@ -431,10 +435,10 @@ func (s *Server) Get(request Request) error {
 	notifyFn = s.cacheStatusFn
 
 	registryApiRequest, err := http.NewRequest(http.MethodGet, request.String(), nil)
-	l.Debug("Sending request to registry API", "url", registryApiRequest.URL.String())
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP request for registry API: %w", err)
 	}
+	l.Debug("Sending request to registry API", "url", registryApiRequest.URL.String())
 
 	resp, err := s.httpClient.Do(registryApiRequest)
 	if err != nil {
