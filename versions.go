@@ -64,7 +64,7 @@ func (s *Server) GetAvailableVersions(req VersionsRequest) (goversion.Collection
 		return nil, fmt.Errorf("failed to create request for versions: %w", err)
 	}
 
-	resp, err := http.DefaultClient.Do(versionRequest)
+	resp, err := s.httpClient.Do(versionRequest)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get versions: %w", err)
 	}

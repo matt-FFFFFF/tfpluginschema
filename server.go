@@ -191,6 +191,7 @@ type Server struct {
 	cacheDir      string
 	forceFetch    bool
 	cacheStatusFn CacheStatusFunc
+	httpClient    *http.Client
 }
 
 // NewServer creates a new Server instance with an optional logger and zero or
@@ -206,12 +207,13 @@ func NewServer(l *slog.Logger, opts ...ServerOption) *Server {
 	}
 	l.Info("Creating new server instance")
 	s := &Server{
-		dlc:       make(downloadCache),
-		sc:        make(schemaCache),
-		l:         l,
-		versionsc: make(versionsCache),
-		mu:        &sync.RWMutex{},
-		cacheDir:  defaultCacheDir(),
+		dlc:        make(downloadCache),
+		sc:         make(schemaCache),
+		l:          l,
+		versionsc:  make(versionsCache),
+		mu:         &sync.RWMutex{},
+		cacheDir:   defaultCacheDir(),
+		httpClient: http.DefaultClient,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -259,6 +261,28 @@ func (s *Server) Cleanup() {
 
 	s.l.Info("Cleaning up temporary directory", "dir", tmpDir)
 	os.RemoveAll(tmpDir)
+}
+
+// validateProviderFileName ensures the filename reported by the registry is a
+// safe, simple basename before it is joined with s.tmpDir. Rejects empty
+// names, anything containing a path separator (forward or back slash), any
+// "." / ".." traversal component, NUL bytes, or absolute paths. Keeps the
+// checks conservative — registry filenames in practice are of the form
+// "terraform-provider-<name>_<version>_<os>_<arch>.zip".
+func validateProviderFileName(name string) error {
+	if name == "" {
+		return fmt.Errorf("filename must not be empty")
+	}
+	if strings.ContainsAny(name, "/\\\x00") {
+		return fmt.Errorf("filename %q must not contain path separators or NUL bytes", name)
+	}
+	if name == "." || name == ".." {
+		return fmt.Errorf("filename %q is not a valid basename", name)
+	}
+	if filepath.IsAbs(name) || filepath.Base(name) != name {
+		return fmt.Errorf("filename %q must be a simple basename", name)
+	}
+	return nil
 }
 
 // validateCachePathComponent validates a single Request field used both as a
@@ -412,7 +436,7 @@ func (s *Server) Get(request Request) error {
 		return fmt.Errorf("failed to create HTTP request for registry API: %w", err)
 	}
 
-	resp, err := http.DefaultClient.Do(registryApiRequest)
+	resp, err := s.httpClient.Do(registryApiRequest)
 	if err != nil {
 		return fmt.Errorf("failed to send HTTP request to registry API: %w", err)
 	}
@@ -432,6 +456,15 @@ func (s *Server) Get(request Request) error {
 	}
 
 	l.Info("Plugin API response received", "arch", pluginResponse.Arch, "os", pluginResponse.OS, "filename", pluginResponse.FileName, "download_url", pluginResponse.DownloadURL)
+
+	// Sanitize the filename reported by the registry before using it as a
+	// local filesystem path component. It must be a simple base name with no
+	// path separators or traversal; anything else is rejected to avoid
+	// writing outside s.tmpDir if the registry response is malicious or
+	// corrupted.
+	if err := validateProviderFileName(pluginResponse.FileName); err != nil {
+		return fmt.Errorf("invalid plugin filename from registry: %w", err)
+	}
 
 	downloadURL := pluginResponse.DownloadURL
 	if downloadURL == "" {
@@ -453,7 +486,7 @@ func (s *Server) Get(request Request) error {
 		return fmt.Errorf("failed to create HTTP request for plugin download: %w", err)
 	}
 
-	resp, err = http.DefaultClient.Do(downloadRequest)
+	resp, err = s.httpClient.Do(downloadRequest)
 	if err != nil {
 		return fmt.Errorf("failed to download plugin: %w", err)
 	}

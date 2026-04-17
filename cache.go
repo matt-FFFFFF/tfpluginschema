@@ -2,6 +2,7 @@ package tfpluginschema
 
 import (
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -63,6 +64,17 @@ func WithCacheDir(dir string) ServerOption {
 func WithForceFetch(force bool) ServerOption {
 	return func(s *Server) {
 		s.forceFetch = force
+	}
+}
+
+// WithHTTPClient overrides the HTTP client used by the Server for registry
+// and download requests. Useful for setting timeouts, custom transports, or
+// for testing via httptest. A nil client is ignored.
+func WithHTTPClient(c *http.Client) ServerOption {
+	return func(s *Server) {
+		if c != nil {
+			s.httpClient = c
+		}
 	}
 }
 

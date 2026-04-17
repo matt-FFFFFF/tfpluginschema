@@ -1,10 +1,14 @@
 package tfpluginschema
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -157,8 +161,6 @@ func TestServer_Get_CacheHit(t *testing.T) {
 
 func TestServer_Get_CacheHitSkippedByForceFetch(t *testing.T) {
 	cacheRoot := t.TempDir()
-	// Use a deliberately-nonexistent provider so that the bypassed cache path
-	// leads to a registry 404, regardless of network availability in CI.
 	req := Request{
 		Namespace: "does-not-exist-tfpluginschema",
 		Name:      "does-not-exist-tfpluginschema",
@@ -166,11 +168,32 @@ func TestServer_Get_CacheHitSkippedByForceFetch(t *testing.T) {
 	}
 	writeFakeProviderBinary(t, cacheRoot, req)
 
+	// Route all HTTP traffic to a local test server that always 404s. This
+	// keeps the test deterministic and offline — force-fetch bypasses the
+	// cache, we observe a Miss callback, and the stubbed registry fails the
+	// download attempt without any real network I/O.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.NotFound(w, nil)
+	}))
+	t.Cleanup(ts.Close)
+
+	tsURL, err := url.Parse(ts.URL)
+	require.NoError(t, err)
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &rewriteHostTransport{
+			host:    tsURL.Host,
+			scheme:  tsURL.Scheme,
+			wrapped: http.DefaultTransport,
+		},
+	}
+
 	called := 0
 	var gotStatus CacheStatus
 	s := NewServer(nil,
 		WithCacheDir(cacheRoot),
 		WithForceFetch(true),
+		WithHTTPClient(client),
 		WithCacheStatusFunc(func(_ Request, st CacheStatus) {
 			called++
 			gotStatus = st
@@ -178,9 +201,6 @@ func TestServer_Get_CacheHitSkippedByForceFetch(t *testing.T) {
 	)
 	t.Cleanup(s.Cleanup)
 
-	// Force-fetch bypasses the cache and triggers a network request. The
-	// important assertion is that the cache was bypassed and a miss reported;
-	// the actual download may or may not fail depending on the environment.
 	_ = s.Get(req)
 	assert.Equal(t, 1, called, "cache status callback should fire once")
 	assert.Equal(t, CacheStatusMiss, gotStatus, "force-fetch must report a miss, not a hit")
@@ -217,4 +237,20 @@ func TestNewServer_EnvCacheDirUsedByDefault(t *testing.T) {
 
 	s := NewServer(nil)
 	assert.Equal(t, custom, s.CacheDir())
+}
+
+// rewriteHostTransport redirects all outgoing requests to a fixed host/scheme,
+// allowing tests to stub the registry without real network calls.
+type rewriteHostTransport struct {
+host    string
+scheme  string
+wrapped http.RoundTripper
+}
+
+func (t *rewriteHostTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+clone := req.Clone(req.Context())
+clone.URL.Host = t.host
+clone.URL.Scheme = t.scheme
+clone.Host = ""
+return t.wrapped.RoundTrip(clone)
 }
