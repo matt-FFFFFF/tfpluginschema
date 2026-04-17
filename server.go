@@ -290,6 +290,9 @@ func (s *Server) Get(request Request) error {
 	}
 
 	l := s.l.With("request_namespace", request.Namespace, "request_name", request.Name, "request_version", request.Version)
+	var notifyRequest Request
+	var notifyStatus cacheStatus
+	var shouldNotify bool
 
 	if !request.fixedVersion() {
 		var err error
@@ -309,7 +312,12 @@ func (s *Server) Get(request Request) error {
 
 	// Lock for the download and extraction process to avoid multiple downloads of the same plugin
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer func() {
+		s.mu.Unlock()
+		if shouldNotify {
+			s.notifyCacheStatus(notifyRequest, notifyStatus)
+		}
+	}()
 
 	// Re-check after acquiring the write lock: another goroutine may have
 	// populated the cache between the RUnlock above and Lock here.
