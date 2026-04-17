@@ -26,6 +26,46 @@ const (
 	urlPathSeparator       = '/'
 )
 
+func validateCachePathComponent(name, value string) error {
+	if value == "" {
+		return fmt.Errorf("%s must not be empty", name)
+	}
+
+	if value == "." || value == ".." {
+		return fmt.Errorf("%s contains invalid path traversal", name)
+	}
+
+	if value != filepath.Base(value) {
+		return fmt.Errorf("%s contains path separators", name)
+	}
+
+	if strings.ContainsRune(value, filepath.Separator) {
+		return fmt.Errorf("%s contains path separators", name)
+	}
+
+	if filepath.Separator != '/' && strings.ContainsRune(value, '/') {
+		return fmt.Errorf("%s contains path separators", name)
+	}
+
+	return nil
+}
+
+func ensureWithinBaseDir(baseDir, targetDir string) error {
+	baseClean := filepath.Clean(baseDir)
+	targetClean := filepath.Clean(targetDir)
+
+	rel, err := filepath.Rel(baseClean, targetClean)
+	if err != nil {
+		return fmt.Errorf("failed to evaluate cache path: %w", err)
+	}
+
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return fmt.Errorf("computed cache path %q escapes cache root %q", targetClean, baseClean)
+	}
+
+	return nil
+}
+
 // RegistryType represents the type of provider registry to use.
 type RegistryType string
 
@@ -239,8 +279,19 @@ func (s *Server) Get(request Request) error {
 		return nil
 	}
 
+	if err := validateCachePathComponent("request name", request.Name); err != nil {
+		return err
+	}
+	if err := validateCachePathComponent("request version", request.Version); err != nil {
+		return err
+	}
+
 	// Check the persistent on-disk cache first (unless force-fetch is set).
 	extractDir := cacheProviderDir(s.cacheDir, request)
+	if err := ensureWithinBaseDir(s.cacheDir, extractDir); err != nil {
+		return err
+	}
+
 	if !s.forceFetch {
 		if path, ok := findProviderBinary(extractDir, request.Name); ok {
 			l.Info("Provider cache hit", "path", path, "cache_dir", s.cacheDir)
