@@ -208,8 +208,8 @@ The library implements three levels of caching:
    `Server` instance.
 3. **Schema cache**: Caches retrieved schemas to avoid repeated RPC calls.
 
-The in-memory caches are cleared when `Server.Cleanup()` is called. The
-on-disk cache is preserved across runs.
+The on-disk cache is preserved across runs. The in-memory caches are scoped
+to the lifetime of a `Server` instance.
 
 ### Provider cache layout
 
@@ -281,7 +281,7 @@ Contributions are welcome! Please ensure that:
 ## Notes
 
 - The library uses the OpenTofu registry (`https://registry.opentofu.org`) by default
-- Temporary files are automatically cleaned up when `Server.Cleanup()` is called
+- Temporary files and legacy temporary directories are cleaned up when `Server.Cleanup()` is called
 - The library handles cross-platform provider downloads automatically
 - Base64-encoded type information in schemas is automatically decoded for easier consumption
 
