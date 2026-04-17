@@ -86,15 +86,28 @@ func defaultCacheDir() string {
 	return filepath.Join(os.TempDir(), "tfpluginschema-cache")
 }
 
+// cachePathSegment returns a filesystem-safe cache path segment.
+// Empty values are mapped to "default" to keep the cache layout stable.
+func cachePathSegment(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "default"
+	}
+
+	replacer := strings.NewReplacer("/", "_", "\\", "_", ":", "_")
+	return replacer.Replace(value)
+}
+
 // cacheProviderDir returns the predictable cache directory for a given
 // provider request. The layout is:
 //
-//	<cacheDir>/terraform-provider-<name>/<version>/<os>_<arch>
+//	<cacheDir>/<namespace>/terraform-provider-<name>/<version>/<os>_<arch>
 //
 // The request version must be a concrete version (not a constraint).
 func cacheProviderDir(cacheDir string, request Request) string {
 	return filepath.Join(
 		cacheDir,
+		cachePathSegment(request.Namespace),
 		providerFileNamePrefix+request.Name,
 		request.Version,
 		runtime.GOOS+"_"+runtime.GOARCH,
