@@ -184,10 +184,19 @@ func (s *Server) readSchema(request Request) (*tfjson.ProviderSchema, error) {
 	return resp, nil
 }
 
-// Cleanup removes the temporary directory used for plugin downloads.
+// Cleanup removes the Server's in-memory state and any legacy temporary
+// directory used for plugin downloads.
 func (s *Server) Cleanup() {
-	s.l.Info("Cleaning up temporary directory", "dir", s.tmpDir)
-	os.RemoveAll(s.tmpDir)
+	s.mu.Lock()
+	tmpDir := s.tmpDir
+	clear(s.dlc)
+	clear(s.sc)
+	clear(s.versionsc)
+	s.tmpDir = ""
+	s.mu.Unlock()
+
+	s.l.Info("Cleaning up temporary directory", "dir", tmpDir)
+	os.RemoveAll(tmpDir)
 }
 
 // Get retrieves the plugin for the specified request, downloading it if necessary.
