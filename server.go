@@ -275,14 +275,17 @@ func validateProviderFileName(name string) error {
 	if name == "" {
 		return fmt.Errorf("filename must not be empty")
 	}
-	if strings.ContainsAny(name, "/\\\x00") {
-		return fmt.Errorf("filename %q must not contain path separators or NUL bytes", name)
+	if strings.ContainsAny(name, "/\\\x00:") {
+		return fmt.Errorf("filename %q must not contain path separators, drive/stream separators, or NUL bytes", name)
 	}
 	if name == "." || name == ".." {
 		return fmt.Errorf("filename %q is not a valid basename", name)
 	}
 	if filepath.IsAbs(name) || filepath.Base(name) != name {
 		return fmt.Errorf("filename %q must be a simple basename", name)
+	}
+	if filepath.VolumeName(name) != "" {
+		return fmt.Errorf("filename %q must not contain a volume/drive name", name)
 	}
 	return nil
 }

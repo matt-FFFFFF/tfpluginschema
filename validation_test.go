@@ -67,6 +67,8 @@ func TestValidateProviderFileName(t *testing.T) {
 		{"parent traversal", "../evil.zip", true},
 		{"nul", "evil\x00.zip", true},
 		{"absolute unix", "/tmp/evil.zip", true},
+		{"colon stream", "file:stream.zip", true},
+		{"drive relative", "C:evil.zip", true},
 	}
 	if runtime.GOOS == "windows" {
 		cases = append(cases,
