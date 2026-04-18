@@ -235,7 +235,14 @@ The default `<cacheDir>` is `os.UserCacheDir()/tfpluginschema` (for example
 To always re-download providers, use:
 
 - The `--force-fetch` CLI flag.
-- The `tfpluginschema.WithForceFetch(true)` option to `NewServer`.
+- The `tfpluginschema.WithForceFetch(true)` option passed to `NewServer`.
+
+Current public API notes:
+
+- `NewServer(l *slog.Logger, opts ...ServerOption) *Server` accepts a logger
+  and zero or more `ServerOption` values.
+- `Request` includes `RegistryType` in addition to provider-identifying fields
+  such as namespace, name, and version.
 
 ### Observing cache hits / misses
 
