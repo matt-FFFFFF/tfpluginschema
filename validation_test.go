@@ -148,5 +148,12 @@ func TestEnsureWithinBaseDir(t *testing.T) {
 		target := filepath.Join(linkName, "hashicorp", "aws", "1.0.0")
 		err := ensureWithinBaseDir(base, target)
 		assert.Error(t, err, "symlink escape must be detected")
+
+		// Guarantee that no filesystem mutations leaked through the
+		// symlink into `outside` (e.g. <outside>/hashicorp). The symlink
+		// must not have been traversed before rejection.
+		entries, rerr := os.ReadDir(outside)
+		require.NoError(t, rerr)
+		assert.Empty(t, entries, "no directories should have been created outside base via the symlink")
 	})
 }

@@ -57,48 +57,70 @@ func ensureWithinBaseDir(baseDir, targetDir string) error {
 		return fmt.Errorf("failed to resolve cache root %q: %w", baseClean, err)
 	}
 
-	// Materialize the parent of targetClean as well. Without this an
-	// attacker racing to create a symlink in a not-yet-existing path
-	// segment between this check and a subsequent MkdirAll/extract could
-	// redirect writes outside the cache root. After MkdirAll the parent
-	// chain exists as real directories; EvalSymlinks below then resolves
-	// the full chain so any pre-existing symlinks are caught.
-	parent := filepath.Dir(targetClean)
-	if parent != targetClean {
-		if err := os.MkdirAll(parent, 0o755); err != nil {
-			return fmt.Errorf("failed to materialize cache path parent %q: %w", parent, err)
-		}
-	}
-
-	// Walk up targetClean to the deepest existing ancestor and resolve
-	// symlinks on it; then confirm containment.
-	existing := targetClean
-	for {
-		if _, err := os.Lstat(existing); err == nil {
-			break
-		} else if !os.IsNotExist(err) {
-			return fmt.Errorf("failed to stat %q: %w", existing, err)
-		}
-		parent := filepath.Dir(existing)
-		if parent == existing {
-			// Reached filesystem root without finding an existing ancestor;
-			// this shouldn't happen because baseReal exists, but be safe.
-			return nil
-		}
-		existing = parent
-	}
-
-	existingReal, err := filepath.EvalSymlinks(existing)
+	// Materialize the parent chain of targetClean, walking one segment at
+	// a time from baseReal. We intentionally avoid os.MkdirAll here: it
+	// follows symlinks, which would let a pre-existing symlink in an
+	// ancestor segment (e.g. <base>/opentofu -> /outside) cause
+	// directories to be created outside baseDir before any containment
+	// check could reject the escape. Instead, for each segment we Lstat
+	// it: if missing, os.Mkdir (single level); if present, require a real
+	// directory (not a symlink, not a file). Any symlink encountered
+	// aborts with an error and leaves the filesystem outside base
+	// untouched.
+	relTarget, err := filepath.Rel(baseClean, targetClean)
 	if err != nil {
-		return fmt.Errorf("failed to resolve %q: %w", existing, err)
+		return fmt.Errorf("failed to compute target path relative to cache root: %w", err)
+	}
+	if relTarget == ".." || strings.HasPrefix(relTarget, ".."+string(filepath.Separator)) || filepath.IsAbs(relTarget) {
+		return fmt.Errorf("resolved cache path %q escapes cache root %q", targetClean, baseClean)
+	}
+	segments := []string{}
+	if relTarget != "." {
+		segments = strings.Split(relTarget, string(filepath.Separator))
+	}
+	// Walk only the parent chain (exclude the leaf itself); the caller is
+	// responsible for creating the leaf.
+	current := baseClean
+	for i := 0; i < len(segments)-1; i++ {
+		current = filepath.Join(current, segments[i])
+		info, lerr := os.Lstat(current)
+		switch {
+		case lerr == nil:
+			if info.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("cache path segment %q is a symlink; refusing to traverse", current)
+			}
+			if !info.IsDir() {
+				return fmt.Errorf("cache path segment %q exists and is not a directory", current)
+			}
+		case os.IsNotExist(lerr):
+			if err := os.Mkdir(current, 0o755); err != nil && !os.IsExist(err) {
+				return fmt.Errorf("failed to create cache path segment %q: %w", current, err)
+			}
+		default:
+			return fmt.Errorf("failed to stat cache path segment %q: %w", current, lerr)
+		}
 	}
 
-	rel2, err := filepath.Rel(baseReal, existingReal)
-	if err != nil {
-		return fmt.Errorf("failed to evaluate resolved cache path: %w", err)
-	}
-	if rel2 == ".." || strings.HasPrefix(rel2, ".."+string(filepath.Separator)) || filepath.IsAbs(rel2) {
-		return fmt.Errorf("resolved cache path %q escapes cache root %q (symlink)", existingReal, baseReal)
+	// Finally, if the leaf itself already exists, make sure it (and by
+	// extension its resolved location) is still contained within
+	// baseReal; this catches the case where the leaf was created as a
+	// symlink by another process before we were called.
+	if leafInfo, lerr := os.Lstat(targetClean); lerr == nil {
+		if leafInfo.Mode()&os.ModeSymlink != 0 {
+			resolved, rerr := filepath.EvalSymlinks(targetClean)
+			if rerr != nil {
+				return fmt.Errorf("failed to resolve cache path leaf %q: %w", targetClean, rerr)
+			}
+			rel2, rerr := filepath.Rel(baseReal, resolved)
+			if rerr != nil {
+				return fmt.Errorf("failed to evaluate resolved cache leaf: %w", rerr)
+			}
+			if rel2 == ".." || strings.HasPrefix(rel2, ".."+string(filepath.Separator)) || filepath.IsAbs(rel2) {
+				return fmt.Errorf("resolved cache path %q escapes cache root %q (symlink)", resolved, baseReal)
+			}
+		}
+	} else if !os.IsNotExist(lerr) {
+		return fmt.Errorf("failed to stat cache path leaf %q: %w", targetClean, lerr)
 	}
 
 	return nil
