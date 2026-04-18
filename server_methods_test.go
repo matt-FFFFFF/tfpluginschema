@@ -485,4 +485,3 @@ func TestRequest_fixVersion_PassesRegistryType(t *testing.T) {
 	assert.Equal(t, "2.0.0", got.Version)
 	assert.Equal(t, RegistryTypeTerraform, got.RegistryType)
 }
-

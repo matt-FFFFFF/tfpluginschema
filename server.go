@@ -601,8 +601,19 @@ func (s *Server) Get(request Request) error {
 	if err := os.RemoveAll(stagingDir); err != nil {
 		return fmt.Errorf("failed to clear staging directory %s: %w", stagingDir, err)
 	}
-	if err := os.MkdirAll(stagingDir, 0o755); err != nil {
+	// Create the staging leaf symlink-safely. Use os.Mkdir (not MkdirAll,
+	// which would follow a raced-in symlink at the leaf path) so the call
+	// fails with EEXIST if anything is created at stagingDir between the
+	// RemoveAll above and this Mkdir. Then Lstat to confirm we created a
+	// real directory (not a symlink). The parent chain has already been
+	// materialized symlink-safely by ensureWithinBaseDir above.
+	if err := os.Mkdir(stagingDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create staging directory %s: %w", stagingDir, err)
+	}
+	if info, err := os.Lstat(stagingDir); err != nil {
+		return fmt.Errorf("failed to stat staging directory %s: %w", stagingDir, err)
+	} else if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("staging directory %s is not a real directory", stagingDir)
 	}
 	// Ensure we don't leave a partial staging directory behind on any error
 	// path below. On success the RemoveAll after Rename is a no-op.
