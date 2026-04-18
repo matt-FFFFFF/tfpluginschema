@@ -44,14 +44,16 @@ func ensureWithinBaseDir(baseDir, targetDir string) error {
 		return fmt.Errorf("computed cache path %q escapes cache root %q", targetClean, baseClean)
 	}
 
-	// Resolve symlinks on the base directory (if it exists). If baseDir does
-	// not yet exist, EvalSymlinks returns an error; that's fine — there are
-	// no symlinks to escape through in that case.
+	// Resolve symlinks on the base directory. To avoid a TOCTOU race where
+	// another process could create baseDir (or one of its ancestors) as a
+	// symlink between this check and subsequent RemoveAll/MkdirAll/extract
+	// calls, we materialize baseDir up front so EvalSymlinks has something
+	// concrete to resolve.
+	if err := os.MkdirAll(baseClean, 0o755); err != nil {
+		return fmt.Errorf("failed to create cache root %q: %w", baseClean, err)
+	}
 	baseReal, err := filepath.EvalSymlinks(baseClean)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
 		return fmt.Errorf("failed to resolve cache root %q: %w", baseClean, err)
 	}
 
