@@ -57,6 +57,19 @@ func ensureWithinBaseDir(baseDir, targetDir string) error {
 		return fmt.Errorf("failed to resolve cache root %q: %w", baseClean, err)
 	}
 
+	// Materialize the parent of targetClean as well. Without this an
+	// attacker racing to create a symlink in a not-yet-existing path
+	// segment between this check and a subsequent MkdirAll/extract could
+	// redirect writes outside the cache root. After MkdirAll the parent
+	// chain exists as real directories; EvalSymlinks below then resolves
+	// the full chain so any pre-existing symlinks are caught.
+	parent := filepath.Dir(targetClean)
+	if parent != targetClean {
+		if err := os.MkdirAll(parent, 0o755); err != nil {
+			return fmt.Errorf("failed to materialize cache path parent %q: %w", parent, err)
+		}
+	}
+
 	// Walk up targetClean to the deepest existing ancestor and resolve
 	// symlinks on it; then confirm containment.
 	existing := targetClean

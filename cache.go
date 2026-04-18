@@ -40,10 +40,12 @@ func (c CacheStatus) String() string {
 
 // CacheStatusFunc is invoked by the Server after resolving a provider request
 // to report whether the provider binary was found in the local cache
-// (CacheStatusHit) or was not in the cache and will be downloaded
-// (CacheStatusMiss). The callback is fired before the download completes,
-// so a miss does not imply the download was successful. The request passed
-// in has a concrete (fixed) version.
+// (CacheStatusHit) or was not in the cache and a download was attempted
+// (CacheStatusMiss). The callback fires after the download/extract attempt
+// completes and after the Server's internal lock has been released, so a
+// miss does not imply the download was successful — it indicates only that
+// the cache did not satisfy the request and a fetch was attempted. The
+// request passed in has a concrete (fixed) version.
 type CacheStatusFunc func(request Request, status CacheStatus)
 
 // ServerOption configures a Server at construction time.
@@ -170,5 +172,3 @@ func findProviderBinary(dir, providerName string) (string, bool) {
 	}
 	return found, true
 }
-
-
