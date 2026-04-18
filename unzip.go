@@ -51,6 +51,18 @@ func unzipFile(f *zip.File, destination string) error {
 		return fmt.Errorf("invalid zip entry %q: escapes destination directory", name)
 	}
 
+	// Symlink-safe containment: walk the parent chain of path under
+	// cleanDest one segment at a time, refusing to traverse any
+	// pre-existing (or raced-in) symlink. Without this, a symlink placed
+	// under destination by a concurrent process could cause the later
+	// MkdirAll/OpenFile to write outside destination even though the
+	// lexical rel check above passed. ensureWithinBaseDir also materializes
+	// the parent chain with single-level Mkdir so the subsequent MkdirAll
+	// has no symlink segments to follow.
+	if err := ensureWithinBaseDir(cleanDest, path); err != nil {
+		return fmt.Errorf("invalid zip entry %q: %w", name, err)
+	}
+
 	rc, err := f.Open()
 	if err != nil {
 		return fmt.Errorf("failed to open file in zip: %w", err)
@@ -65,7 +77,9 @@ func unzipFile(f *zip.File, destination string) error {
 		return nil
 	}
 
-	// Ensure parent directory exists
+	// Ensure parent directory exists. ensureWithinBaseDir above has
+	// already materialized every real-directory parent segment, so this
+	// MkdirAll has no symlink segments left to follow.
 	parentDir := filepath.Dir(path)
 	if err := os.MkdirAll(parentDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create parent directory: %w", err)

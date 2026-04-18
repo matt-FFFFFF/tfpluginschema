@@ -611,9 +611,12 @@ func (s *Server) Get(request Request) error {
 	// best-effort basis, rename the staging dir into place, and only then
 	// remove the old entry. Readers either see the previous valid entry or
 	// the newly published one — never a partially-replaced directory.
-	if err := os.MkdirAll(filepath.Dir(extractDir), 0o755); err != nil {
-		return fmt.Errorf("failed to create cache parent directory: %w", err)
-	}
+	//
+	// Note: we intentionally do NOT os.MkdirAll(filepath.Dir(extractDir))
+	// here. ensureWithinBaseDir(s.cacheDir, stagingDir) above already
+	// materialized the shared parent chain of stagingDir/extractDir using
+	// a symlink-safe, segment-by-segment walk. Calling MkdirAll here
+	// would re-introduce symlink-following and a fresh TOCTOU window.
 	oldDir := extractDir + ".old"
 	// Best-effort: clear any leftover ".old" from a previous interrupted run.
 	_ = os.RemoveAll(oldDir)
