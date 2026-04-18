@@ -1,109 +1,115 @@
 package tfpluginschema
 
 import (
-	"archive/zip"
-	"fmt"
-	"io"
-	"os"
-	"path/filepath"
-	"strings"
+"archive/zip"
+"fmt"
+"io"
+"os"
+"path/filepath"
+"strings"
 )
 
+// unzip extracts a Terraform provider zip archive into destination.
+// Terraform provider archives are flat: every entry is a regular file
+// in the archive root (e.g. "terraform-provider-foo_v1.2.3", "LICENSE").
+// Directory entries, nested paths, symlinks, or any other non-regular
+// entries are rejected. Entries are written via a temp file in destination
+// and then atomically renamed into place, so a pre-existing (or raced-in)
+// symlink at the target path is replaced rather than followed.
 func unzip(source, destination string) error {
-	r, err := zip.OpenReader(source)
-	if err != nil {
-		return fmt.Errorf("failed to open zip file: %w", err)
-	}
-	defer r.Close()
+r, err := zip.OpenReader(source)
+if err != nil {
+return fmt.Errorf("failed to open zip file: %w", err)
+}
+defer r.Close()
 
-	for _, f := range r.File {
-		if err := unzipFile(f, destination); err != nil {
-			return fmt.Errorf("failed to extract file from zip: %w", err)
-		}
-	}
+for _, f := range r.File {
+if err := unzipFile(f, destination); err != nil {
+return fmt.Errorf("failed to extract file from zip: %w", err)
+}
+}
 
-	return nil
+return nil
 }
 
 func unzipFile(f *zip.File, destination string) error {
-	// Zip Slip hardening: validate the entry name before joining it with the
-	// destination directory. Reject absolute paths, drive/volume prefixes
-	// (Windows), and any entry whose cleaned join escapes destination via
-	// "../" segments. This must happen before any filesystem operation so a
-	// malicious archive cannot create directories or files outside dest.
-	name := f.Name
-	if name == "" {
-		return fmt.Errorf("invalid zip entry: empty name")
-	}
-	if filepath.IsAbs(name) || filepath.IsAbs(filepath.FromSlash(name)) {
-		return fmt.Errorf("invalid zip entry %q: absolute path not allowed", name)
-	}
-	if vol := filepath.VolumeName(filepath.FromSlash(name)); vol != "" {
-		return fmt.Errorf("invalid zip entry %q: volume/drive prefix not allowed", name)
-	}
-	cleanDest := filepath.Clean(destination)
-	path := filepath.Join(cleanDest, filepath.FromSlash(name))
-	rel, err := filepath.Rel(cleanDest, path)
-	if err != nil {
-		return fmt.Errorf("invalid zip entry %q: %w", name, err)
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("invalid zip entry %q: escapes destination directory", name)
-	}
+name := f.Name
+if name == "" {
+return fmt.Errorf("invalid zip entry: empty name")
+}
 
-	// Symlink-safe containment: walk the parent chain of path under
-	// cleanDest one segment at a time, refusing to traverse any
-	// pre-existing (or raced-in) symlink. Without this, a symlink placed
-	// under destination by a concurrent process could cause the later
-	// MkdirAll/OpenFile to write outside destination even though the
-	// lexical rel check above passed. ensureWithinBaseDir also materializes
-	// the parent chain with single-level Mkdir so the subsequent MkdirAll
-	// has no symlink segments to follow.
-	if err := ensureWithinBaseDir(cleanDest, path); err != nil {
-		return fmt.Errorf("invalid zip entry %q: %w", name, err)
-	}
+// Directory entries are not expected in provider zips; reject them.
+if f.FileInfo().IsDir() || strings.HasSuffix(name, "/") {
+return fmt.Errorf("invalid zip entry %q: directory entries not allowed (provider zip must be flat)", name)
+}
+// Only regular files are allowed — reject symlinks, devices, etc.
+if !f.Mode().IsRegular() {
+return fmt.Errorf("invalid zip entry %q: non-regular file not allowed", name)
+}
+// The entry name must be a simple base name in the archive root: no
+// path separators, no volume/drive prefix, no traversal, no absolute
+// paths.
+if strings.ContainsAny(name, `/\`) {
+return fmt.Errorf("invalid zip entry %q: path separators not allowed (provider zip must be flat)", name)
+}
+if strings.ContainsRune(name, 0) {
+return fmt.Errorf("invalid zip entry %q: NUL byte not allowed", name)
+}
+if name == "." || name == ".." {
+return fmt.Errorf("invalid zip entry %q: reserved name not allowed", name)
+}
+if filepath.IsAbs(name) || filepath.VolumeName(name) != "" {
+return fmt.Errorf("invalid zip entry %q: absolute path or volume prefix not allowed", name)
+}
+// Defence in depth: filepath.Clean / filepath.Base must be a no-op for
+// a simple base name.
+if filepath.Base(name) != name || filepath.Clean(name) != name {
+return fmt.Errorf("invalid zip entry %q: must be a simple base name", name)
+}
 
-	rc, err := f.Open()
-	if err != nil {
-		return fmt.Errorf("failed to open file in zip: %w", err)
-	}
-	defer rc.Close()
+rc, err := f.Open()
+if err != nil {
+return fmt.Errorf("failed to open file in zip: %w", err)
+}
+defer rc.Close()
 
-	if f.FileInfo().IsDir() {
-		// Use a sane default permission for directories
-		if err := os.MkdirAll(path, 0o755); err != nil {
-			return fmt.Errorf("failed to create directory: %w", err)
-		}
-		return nil
-	}
+fperm := f.Mode().Perm()
+if fperm == 0 {
+fperm = 0o644
+}
 
-	// Ensure parent directory exists. ensureWithinBaseDir above has
-	// already materialized every real-directory parent segment, so this
-	// MkdirAll has no symlink segments left to follow.
-	parentDir := filepath.Dir(path)
-	if err := os.MkdirAll(parentDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create parent directory: %w", err)
-	}
-	// Ensure parent dir is usable even if earlier directory entry had 000 perms
-	if fi, err := os.Stat(parentDir); err == nil {
-		if fi.Mode().Perm()&0o700 == 0 { // no owner perms
-			_ = os.Chmod(parentDir, 0o755)
-		}
-	}
+// Write to a temp file in destination and atomically rename into place.
+// os.Rename replaces any existing entry at the final path (including a
+// symlink) rather than following it, closing the leaf-path TOCTOU that
+// a direct os.OpenFile(finalPath) would otherwise hit.
+tmp, err := os.CreateTemp(destination, "unzip-*.partial")
+if err != nil {
+return fmt.Errorf("failed to create temp file for entry %q: %w", name, err)
+}
+tmpPath := tmp.Name()
+cleanupTmp := true
+defer func() {
+if cleanupTmp {
+_ = os.Remove(tmpPath)
+}
+}()
 
-	fperm := f.Mode().Perm()
-	if fperm == 0 {
-		fperm = 0o644
-	}
-	outFile, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fperm)
-	if err != nil {
-		return fmt.Errorf("failed to create file: %w", err)
-	}
-	defer outFile.Close()
+if _, err := io.Copy(tmp, rc); err != nil {
+_ = tmp.Close()
+return fmt.Errorf("failed to write entry %q: %w", name, err)
+}
+if err := tmp.Chmod(fperm); err != nil {
+_ = tmp.Close()
+return fmt.Errorf("failed to chmod temp file for entry %q: %w", name, err)
+}
+if err := tmp.Close(); err != nil {
+return fmt.Errorf("failed to close temp file for entry %q: %w", name, err)
+}
 
-	if _, err := io.Copy(outFile, rc); err != nil {
-		return fmt.Errorf("failed to write file: %w", err)
-	}
-
-	return nil
+finalPath := filepath.Join(destination, name)
+if err := os.Rename(tmpPath, finalPath); err != nil {
+return fmt.Errorf("failed to publish entry %q: %w", name, err)
+}
+cleanupTmp = false
+return nil
 }

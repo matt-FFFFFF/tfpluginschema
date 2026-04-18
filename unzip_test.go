@@ -32,12 +32,14 @@ func createZip(t *testing.T, path string, entries map[string]string) {
 	require.NoError(t, w.Close())
 }
 
-func TestUnzip_DirectoryAndFile(t *testing.T) {
+func TestUnzip_FlatFiles(t *testing.T) {
+	// Terraform provider zips are flat: every entry is a regular file in
+	// the archive root. Unzip should extract each root-level file into dst.
 	temp := t.TempDir()
 	z := filepath.Join(temp, "test.zip")
 	createZip(t, z, map[string]string{
-		"dir":       "<DIR>",
-		"dir/a.txt": "hello",
+		"terraform-provider-foo_v1.2.3": "binary",
+		"LICENSE":                       "mit",
 	})
 
 	dst := filepath.Join(temp, "out")
@@ -46,14 +48,43 @@ func TestUnzip_DirectoryAndFile(t *testing.T) {
 	err := unzip(z, dst)
 	require.NoError(t, err)
 
-	// directory exists
-	fi, err := os.Stat(filepath.Join(dst, "dir"))
+	data, err := os.ReadFile(filepath.Join(dst, "terraform-provider-foo_v1.2.3"))
 	require.NoError(t, err)
-	assert.True(t, fi.IsDir())
-	// file extracted with content
-	data, err := os.ReadFile(filepath.Join(dst, "dir", "a.txt"))
+	assert.Equal(t, "binary", string(data))
+
+	data, err = os.ReadFile(filepath.Join(dst, "LICENSE"))
 	require.NoError(t, err)
-	assert.Equal(t, "hello", string(data))
+	assert.Equal(t, "mit", string(data))
+}
+
+func TestUnzip_RejectsDirectoryEntry(t *testing.T) {
+	// Directory entries are not expected in flat provider zips; reject
+	// them instead of silently creating nested directories.
+	temp := t.TempDir()
+	z := filepath.Join(temp, "test.zip")
+	createZip(t, z, map[string]string{"dir": "<DIR>"})
+
+	dst := filepath.Join(temp, "out")
+	require.NoError(t, os.MkdirAll(dst, 0o755))
+
+	err := unzip(z, dst)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "directory entries not allowed")
+}
+
+func TestUnzip_RejectsNestedPath(t *testing.T) {
+	// Entries that contain a path separator imply nested structure, which
+	// should also be rejected for flat provider zips.
+	temp := t.TempDir()
+	z := filepath.Join(temp, "test.zip")
+	createZipOrdered(t, z, []string{"dir/a.txt"})
+
+	dst := filepath.Join(temp, "out")
+	require.NoError(t, os.MkdirAll(dst, 0o755))
+
+	err := unzip(z, dst)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path separators not allowed")
 }
 
 func TestUnzipFile_CreateFileError(t *testing.T) {
@@ -97,7 +128,7 @@ func TestUnzip_RejectsZipSlip_TraversalEntry(t *testing.T) {
 
 	err := unzip(z, dst)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "escapes destination directory")
+	assert.Contains(t, err.Error(), "path separators not allowed")
 
 	// The traversal target must not have been created outside dst.
 	_, statErr := os.Stat(filepath.Join(temp, "escaped.txt"))
@@ -117,5 +148,5 @@ func TestUnzip_RejectsZipSlip_AbsoluteEntry(t *testing.T) {
 
 	err := unzip(z, dst)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "absolute path not allowed")
+	assert.Contains(t, err.Error(), "path separators not allowed")
 }

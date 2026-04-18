@@ -424,6 +424,14 @@ func (s *Server) Get(request Request) error {
 		return fmt.Errorf("invalid provider request: %w", err)
 	}
 
+	// Normalize RegistryType so that empty/unknown values share the same
+	// map key (and therefore the same in-memory dlc/sc entries) as
+	// RegistryTypeOpenTofu, matching the behavior of BaseURL() and the
+	// on-disk cache layout. Without this, callers passing an empty/unknown
+	// RegistryType would miss the in-memory cache even when an equivalent
+	// OpenTofu-keyed entry already exists.
+	request.RegistryType = normalizedRegistryType(request.RegistryType)
+
 	var notifyRequest Request
 	var notifyStatus CacheStatus
 	var shouldNotify bool
@@ -856,6 +864,11 @@ func (s *Server) getSchema(request Request) (*tfjson.ProviderSchema, error) {
 	if !request.fixedVersion() {
 		return nil, fmt.Errorf("version must be fixed before getting schema")
 	}
+
+	// Normalize RegistryType so the in-memory schema cache (s.sc) and
+	// download cache (s.dlc) share the same key for empty/unknown values
+	// as RegistryTypeOpenTofu. Server.Get performs the same normalization.
+	request.RegistryType = normalizedRegistryType(request.RegistryType)
 
 	s.mu.RLock()
 	if resp, exists := s.sc[request]; exists {

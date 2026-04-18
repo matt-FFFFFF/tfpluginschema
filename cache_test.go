@@ -136,7 +136,7 @@ func TestFindProviderBinary_NoMatch(t *testing.T) {
 
 func TestServer_Get_CacheHit(t *testing.T) {
 	cacheRoot := t.TempDir()
-	req := Request{Namespace: "hashicorp", Name: "aws", Version: "1.2.3"}
+	req := Request{Namespace: "hashicorp", Name: "aws", Version: "1.2.3", RegistryType: RegistryTypeOpenTofu}
 	bin := writeFakeProviderBinary(t, cacheRoot, req)
 
 	var gotStatus CacheStatus
