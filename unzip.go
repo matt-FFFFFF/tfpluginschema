@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func unzip(source, destination string) error {
@@ -25,13 +26,37 @@ func unzip(source, destination string) error {
 }
 
 func unzipFile(f *zip.File, destination string) error {
+	// Zip Slip hardening: validate the entry name before joining it with the
+	// destination directory. Reject absolute paths, drive/volume prefixes
+	// (Windows), and any entry whose cleaned join escapes destination via
+	// "../" segments. This must happen before any filesystem operation so a
+	// malicious archive cannot create directories or files outside dest.
+	name := f.Name
+	if name == "" {
+		return fmt.Errorf("invalid zip entry: empty name")
+	}
+	if filepath.IsAbs(name) || filepath.IsAbs(filepath.FromSlash(name)) {
+		return fmt.Errorf("invalid zip entry %q: absolute path not allowed", name)
+	}
+	if vol := filepath.VolumeName(filepath.FromSlash(name)); vol != "" {
+		return fmt.Errorf("invalid zip entry %q: volume/drive prefix not allowed", name)
+	}
+	cleanDest := filepath.Clean(destination)
+	path := filepath.Join(cleanDest, filepath.FromSlash(name))
+	rel, err := filepath.Rel(cleanDest, path)
+	if err != nil {
+		return fmt.Errorf("invalid zip entry %q: %w", name, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("invalid zip entry %q: escapes destination directory", name)
+	}
+
 	rc, err := f.Open()
 	if err != nil {
 		return fmt.Errorf("failed to open file in zip: %w", err)
 	}
 	defer rc.Close()
 
-	path := filepath.Join(destination, f.Name)
 	if f.FileInfo().IsDir() {
 		// Use a sane default permission for directories
 		if err := os.MkdirAll(path, 0o755); err != nil {

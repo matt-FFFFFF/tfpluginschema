@@ -545,16 +545,43 @@ func (s *Server) Get(request Request) error {
 		return fmt.Errorf("failed to unzip plugin file: %w", err)
 	}
 
-	// Replace any existing cache entry atomically. os.Rename requires the
-	// target not to exist on some platforms, so clear it first.
-	if err := os.RemoveAll(extractDir); err != nil {
-		return fmt.Errorf("failed to clear cache directory %s: %w", extractDir, err)
-	}
+	// Publish the staging directory into the cache atomically. To stay
+	// readable for any concurrent reader (and to avoid hard failures on
+	// platforms like Windows where in-use binaries can prevent removal of
+	// the existing cache entry), first move any existing entry aside on a
+	// best-effort basis, rename the staging dir into place, and only then
+	// remove the old entry. Readers either see the previous valid entry or
+	// the newly published one — never a partially-replaced directory.
 	if err := os.MkdirAll(filepath.Dir(extractDir), 0o755); err != nil {
 		return fmt.Errorf("failed to create cache parent directory: %w", err)
 	}
+	oldDir := extractDir + ".old"
+	// Best-effort: clear any leftover ".old" from a previous interrupted run.
+	_ = os.RemoveAll(oldDir)
+	movedAside := false
+	if _, statErr := os.Lstat(extractDir); statErr == nil {
+		if err := os.Rename(extractDir, oldDir); err != nil {
+			// Couldn't move aside (e.g. in-use on Windows). Fall back to
+			// removing in place; any failure here surfaces as before.
+			if rmErr := os.RemoveAll(extractDir); rmErr != nil {
+				return fmt.Errorf("failed to clear cache directory %s: %w", extractDir, rmErr)
+			}
+		} else {
+			movedAside = true
+		}
+	}
 	if err := os.Rename(stagingDir, extractDir); err != nil {
+		// Try to restore the previous cache entry so we don't leave the
+		// cache empty on a publish failure.
+		if movedAside {
+			_ = os.Rename(oldDir, extractDir)
+		}
 		return fmt.Errorf("failed to publish cache directory %s: %w", extractDir, err)
+	}
+	if movedAside {
+		// Best-effort cleanup of the previous entry; failures here only
+		// leak disk space and don't affect correctness of the cache.
+		_ = os.RemoveAll(oldDir)
 	}
 
 	// check the extracted directory
