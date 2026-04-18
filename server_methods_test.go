@@ -454,3 +454,35 @@ func TestRequest_fixVersion(t *testing.T) {
 		})
 	}
 }
+
+// TestRequest_fixVersion_PassesRegistryType is a regression test for a bug
+// where latestVersionOf dropped the caller's RegistryType when calling
+// GetAvailableVersions, causing constraint resolution for the Terraform
+// registry to silently go through the OpenTofu registry instead.
+func TestRequest_fixVersion_PassesRegistryType(t *testing.T) {
+	s := NewServer(nil)
+	defer s.Cleanup()
+
+	// Pre-populate only the Terraform-registry versions cache entry. If
+	// latestVersionOf forwards RegistryType correctly this lookup is a cache
+	// hit; otherwise it would miss and attempt a network call (and fail in
+	// this test environment).
+	key := VersionsRequest{
+		Namespace:    "hashicorp",
+		Name:         "aws",
+		RegistryType: RegistryTypeTerraform,
+	}
+	s.versionsc[key] = mustVersions(t, "1.0.0", "1.1.0", "2.0.0")
+
+	req := Request{
+		Namespace:    "hashicorp",
+		Name:         "aws",
+		Version:      "", // "latest"
+		RegistryType: RegistryTypeTerraform,
+	}
+	got, err := req.fixVersion(s)
+	require.NoError(t, err)
+	assert.Equal(t, "2.0.0", got.Version)
+	assert.Equal(t, RegistryTypeTerraform, got.RegistryType)
+}
+

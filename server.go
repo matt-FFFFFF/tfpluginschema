@@ -510,24 +510,51 @@ func (s *Server) Get(request Request) error {
 		return fmt.Errorf("failed to create plugin file: %w", err)
 	}
 
-	defer file.Close()
+	// Ensure the downloaded archive is removed once we're done with it;
+	// otherwise s.tmpDir can accumulate zip files for long-lived processes.
+	defer os.Remove(pluginFilePath)
 
 	if _, err := file.ReadFrom(resp.Body); err != nil {
+		file.Close()
 		return fmt.Errorf("failed to read plugin data into file: %w", err)
 	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("failed to close plugin file: %w", err)
+	}
 
-	// Extract into the persistent cache directory. If it already exists (e.g.
-	// from a prior partial run or force-fetch), clear it first so extraction
-	// starts from a known-clean state.
+	// Extract atomically: unzip into a sibling staging directory, then rename
+	// into place. This ensures concurrent readers never observe a partial
+	// cache entry (findProviderBinary would otherwise treat a half-populated
+	// directory as a cache hit). If a previous run left a partial staging
+	// directory behind, clear it first.
+	stagingDir := extractDir + ".partial"
+	if err := ensureWithinBaseDir(s.cacheDir, stagingDir); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(stagingDir); err != nil {
+		return fmt.Errorf("failed to clear staging directory %s: %w", stagingDir, err)
+	}
+	if err := os.MkdirAll(stagingDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create staging directory %s: %w", stagingDir, err)
+	}
+	// Ensure we don't leave a partial staging directory behind on any error
+	// path below. On success the RemoveAll after Rename is a no-op.
+	defer os.RemoveAll(stagingDir)
+
+	if err := unzip(pluginFilePath, stagingDir); err != nil {
+		return fmt.Errorf("failed to unzip plugin file: %w", err)
+	}
+
+	// Replace any existing cache entry atomically. os.Rename requires the
+	// target not to exist on some platforms, so clear it first.
 	if err := os.RemoveAll(extractDir); err != nil {
 		return fmt.Errorf("failed to clear cache directory %s: %w", extractDir, err)
 	}
-	if err := os.MkdirAll(extractDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create cache directory %s: %w", extractDir, err)
+	if err := os.MkdirAll(filepath.Dir(extractDir), 0o755); err != nil {
+		return fmt.Errorf("failed to create cache parent directory: %w", err)
 	}
-
-	if err := unzip(pluginFilePath, extractDir); err != nil {
-		return fmt.Errorf("failed to unzip plugin file: %w", err)
+	if err := os.Rename(stagingDir, extractDir); err != nil {
+		return fmt.Errorf("failed to publish cache directory %s: %w", extractDir, err)
 	}
 
 	// check the extracted directory
@@ -810,8 +837,9 @@ func (s *Server) getSchema(request Request) (*tfjson.ProviderSchema, error) {
 // latestVersionOf returns the latest version from the provided collection that matches the given constraints.
 func (s *Server) latestVersionOf(request Request) (string, error) {
 	vers, err := s.GetAvailableVersions(VersionsRequest{
-		Namespace: request.Namespace,
-		Name:      request.Name,
+		Namespace:    request.Namespace,
+		Name:         request.Name,
+		RegistryType: request.RegistryType,
 	})
 
 	if err != nil {
