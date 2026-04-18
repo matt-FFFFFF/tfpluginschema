@@ -12,7 +12,7 @@ import (
 func TestGetDataSourceSchema_Success(t *testing.T) {
 	s := NewServer(nil)
 	t.Cleanup(s.Cleanup)
-	req := Request{Namespace: "n", Name: "p", Version: "1.2.3"}
+	req := Request{Namespace: "n", Name: "p", Version: "1.2.3", RegistryType: RegistryTypeOpenTofu}
 	s.sc[req] = &tfjson.ProviderSchema{
 		DataSourceSchemas: map[string]*tfjson.Schema{
 			"ds": {Block: &tfjson.SchemaBlock{}},
@@ -25,7 +25,7 @@ func TestGetDataSourceSchema_Success(t *testing.T) {
 
 func TestGetDataSourceSchema_NotFound(t *testing.T) {
 	s := NewServer(nil)
-	req := Request{Namespace: "n", Name: "p", Version: "1.2.3"}
+	req := Request{Namespace: "n", Name: "p", Version: "1.2.3", RegistryType: RegistryTypeOpenTofu}
 	s.sc[req] = &tfjson.ProviderSchema{DataSourceSchemas: map[string]*tfjson.Schema{}}
 	got, err := s.GetDataSourceSchema(req, "missing")
 	assert.Nil(t, got)
@@ -36,7 +36,7 @@ func TestGetDataSourceSchema_NotFound(t *testing.T) {
 func TestGetFunctionSchema_Success(t *testing.T) {
 	s := NewServer(nil)
 	t.Cleanup(s.Cleanup)
-	req := Request{Namespace: "n", Name: "p", Version: "1.2.3"}
+	req := Request{Namespace: "n", Name: "p", Version: "1.2.3", RegistryType: RegistryTypeOpenTofu}
 	s.sc[req] = &tfjson.ProviderSchema{
 		Functions: map[string]*tfjson.FunctionSignature{
 			"fn": {Summary: "ok"},
@@ -50,7 +50,7 @@ func TestGetFunctionSchema_Success(t *testing.T) {
 
 func TestGetFunctionSchema_NotFound(t *testing.T) {
 	s := NewServer(nil)
-	req := Request{Namespace: "n", Name: "p", Version: "1.2.3"}
+	req := Request{Namespace: "n", Name: "p", Version: "1.2.3", RegistryType: RegistryTypeOpenTofu}
 	s.sc[req] = &tfjson.ProviderSchema{Functions: map[string]*tfjson.FunctionSignature{}}
 	got, err := s.GetFunctionSchema(req, "missing")
 	assert.Nil(t, got)
@@ -61,7 +61,7 @@ func TestGetFunctionSchema_NotFound(t *testing.T) {
 func TestGetEphemeralResourceSchema_Success(t *testing.T) {
 	s := NewServer(nil)
 	t.Cleanup(s.Cleanup)
-	req := Request{Namespace: "n", Name: "p", Version: "1.2.3"}
+	req := Request{Namespace: "n", Name: "p", Version: "1.2.3", RegistryType: RegistryTypeOpenTofu}
 	s.sc[req] = &tfjson.ProviderSchema{
 		EphemeralResourceSchemas: map[string]*tfjson.Schema{
 			"er": {Block: &tfjson.SchemaBlock{}},
@@ -74,7 +74,7 @@ func TestGetEphemeralResourceSchema_Success(t *testing.T) {
 
 func TestGetEphemeralResourceSchema_NotFound(t *testing.T) {
 	s := NewServer(nil)
-	req := Request{Namespace: "n", Name: "p", Version: "1.2.3"}
+	req := Request{Namespace: "n", Name: "p", Version: "1.2.3", RegistryType: RegistryTypeOpenTofu}
 	s.sc[req] = &tfjson.ProviderSchema{EphemeralResourceSchemas: map[string]*tfjson.Schema{}}
 	got, err := s.GetEphemeralResourceSchema(req, "missing")
 	assert.Nil(t, got)
@@ -84,7 +84,7 @@ func TestGetEphemeralResourceSchema_NotFound(t *testing.T) {
 
 func TestGetResourceSchema_NotFound(t *testing.T) {
 	s := NewServer(nil)
-	req := Request{Namespace: "n", Name: "p", Version: "1.2.3"}
+	req := Request{Namespace: "n", Name: "p", Version: "1.2.3", RegistryType: RegistryTypeOpenTofu}
 	s.sc[req] = &tfjson.ProviderSchema{ResourceSchemas: map[string]*tfjson.Schema{}}
 	got, err := s.GetResourceSchema(req, "missing")
 	assert.Nil(t, got)
@@ -252,7 +252,7 @@ func TestRequest_fixVersion(t *testing.T) {
 			},
 			setupServer: func(s *Server) {
 				// Mock the versions response
-				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws"}] = mustVersions([]string{"1.0.0", "1.1.0", "2.0.0"})
+				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws", RegistryType: RegistryTypeOpenTofu}] = mustVersions([]string{"1.0.0", "1.1.0", "2.0.0"})
 			},
 			expectedResult: Request{
 				Namespace: "hashicorp",
@@ -270,7 +270,7 @@ func TestRequest_fixVersion(t *testing.T) {
 			},
 			setupServer: func(s *Server) {
 				// Mock the versions response
-				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws"}] = mustVersions([]string{"0.9.0", "1.0.0", "1.5.0", "2.0.0", "2.1.0"})
+				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws", RegistryType: RegistryTypeOpenTofu}] = mustVersions([]string{"0.9.0", "1.0.0", "1.5.0", "2.0.0", "2.1.0"})
 			},
 			expectedResult: Request{
 				Namespace: "hashicorp",
@@ -288,7 +288,7 @@ func TestRequest_fixVersion(t *testing.T) {
 			},
 			setupServer: func(s *Server) {
 				// Mock the versions response
-				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws"}] = mustVersions([]string{"1.0.0", "1.1.0", "1.1.5", "1.2.0", "2.0.0"})
+				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws", RegistryType: RegistryTypeOpenTofu}] = mustVersions([]string{"1.0.0", "1.1.0", "1.1.5", "1.2.0", "2.0.0"})
 			},
 			expectedResult: Request{
 				Namespace: "hashicorp",
@@ -306,7 +306,7 @@ func TestRequest_fixVersion(t *testing.T) {
 			},
 			setupServer: func(s *Server) {
 				// Mock the versions response
-				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws"}] = mustVersions([]string{"1.0.0", "1.1.0"})
+				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws", RegistryType: RegistryTypeOpenTofu}] = mustVersions([]string{"1.0.0", "1.1.0"})
 			},
 			expectedResult: Request{
 				Namespace: "hashicorp",
@@ -324,7 +324,7 @@ func TestRequest_fixVersion(t *testing.T) {
 			},
 			setupServer: func(s *Server) {
 				// Mock the versions response
-				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws"}] = mustVersions([]string{"1.0.0", "1.1.0", "1.1.5", "1.2.0", "2.0.0"})
+				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws", RegistryType: RegistryTypeOpenTofu}] = mustVersions([]string{"1.0.0", "1.1.0", "1.1.5", "1.2.0", "2.0.0"})
 			},
 			expectedResult: Request{
 				Namespace: "hashicorp",
@@ -342,7 +342,7 @@ func TestRequest_fixVersion(t *testing.T) {
 			},
 			setupServer: func(s *Server) {
 				// Mock the versions response with no matching versions
-				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws"}] = mustVersions([]string{"1.0.0", "2.0.0", "3.0.0"})
+				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws", RegistryType: RegistryTypeOpenTofu}] = mustVersions([]string{"1.0.0", "2.0.0", "3.0.0"})
 			},
 			expectedResult: Request{},
 			expectedError:  "failed to get latest version",
@@ -403,7 +403,7 @@ func TestRequest_fixVersion(t *testing.T) {
 			},
 			setupServer: func(s *Server) {
 				// Mock the versions response
-				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws"}] = mustVersions([]string{"1.0.0", "1.1.0", "1.2.0"})
+				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws", RegistryType: RegistryTypeOpenTofu}] = mustVersions([]string{"1.0.0", "1.1.0", "1.2.0"})
 			},
 			expectedResult: Request{
 				Namespace: "hashicorp",
@@ -421,7 +421,7 @@ func TestRequest_fixVersion(t *testing.T) {
 			},
 			setupServer: func(s *Server) {
 				// Mock the versions response
-				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws"}] = mustVersions([]string{"0.9.0", "1.0.0", "1.2.0", "1.3.0", "1.4.0", "2.0.0"})
+				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws", RegistryType: RegistryTypeOpenTofu}] = mustVersions([]string{"0.9.0", "1.0.0", "1.2.0", "1.3.0", "1.4.0", "2.0.0"})
 			},
 			expectedResult: Request{
 				Namespace: "hashicorp",
@@ -453,4 +453,35 @@ func TestRequest_fixVersion(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRequest_fixVersion_PassesRegistryType is a regression test for a bug
+// where latestVersionOf dropped the caller's RegistryType when calling
+// GetAvailableVersions, causing constraint resolution for the Terraform
+// registry to silently go through the OpenTofu registry instead.
+func TestRequest_fixVersion_PassesRegistryType(t *testing.T) {
+	s := NewServer(nil)
+	defer s.Cleanup()
+
+	// Pre-populate only the Terraform-registry versions cache entry. If
+	// latestVersionOf forwards RegistryType correctly this lookup is a cache
+	// hit; otherwise it would miss and attempt a network call (and fail in
+	// this test environment).
+	key := VersionsRequest{
+		Namespace:    "hashicorp",
+		Name:         "aws",
+		RegistryType: RegistryTypeTerraform,
+	}
+	s.versionsc[key] = mustVersions(t, "1.0.0", "1.1.0", "2.0.0")
+
+	req := Request{
+		Namespace:    "hashicorp",
+		Name:         "aws",
+		Version:      "", // "latest"
+		RegistryType: RegistryTypeTerraform,
+	}
+	got, err := req.fixVersion(s)
+	require.NoError(t, err)
+	assert.Equal(t, "2.0.0", got.Version)
+	assert.Equal(t, RegistryTypeTerraform, got.RegistryType)
 }

@@ -54,6 +54,19 @@ func buildRootCommand() *cli.Command {
 				Usage:   "Registry type: opentofu (default) or terraform",
 				Value:   "opentofu",
 			},
+			&cli.StringFlag{
+				Name:    "cache-dir",
+				Usage:   "Directory used to cache downloaded providers (overrides $" + tfpluginschema.EnvCacheDir + ")",
+				Sources: cli.EnvVars(tfpluginschema.EnvCacheDir),
+			},
+			&cli.BoolFlag{
+				Name:  "force-fetch",
+				Usage: "Always download the provider, bypassing the local cache",
+			},
+			&cli.BoolFlag{
+				Name:  "quiet",
+				Usage: "Suppress cache hit/miss status messages on stderr",
+			},
 		},
 		Commands: []*cli.Command{
 			providerCommand(),
@@ -95,11 +108,28 @@ func registryTypeFromString(s string) tfpluginschema.RegistryType {
 	}
 }
 
-// newServer creates a new tfpluginschema.Server with minimal logging.
-func newServer() *tfpluginschema.Server {
-	return tfpluginschema.NewServer(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+// newServer creates a new tfpluginschema.Server with minimal logging and
+// configures it from the CLI flags (cache dir, force fetch, status reporting).
+func newServer(cmd *cli.Command) *tfpluginschema.Server {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelError,
-	})))
+	}))
+
+	opts := []tfpluginschema.ServerOption{
+		tfpluginschema.WithCacheDir(cmd.String("cache-dir")),
+		tfpluginschema.WithForceFetch(cmd.Bool("force-fetch")),
+	}
+	if !cmd.Bool("quiet") {
+		opts = append(opts, tfpluginschema.WithCacheStatusFunc(func(req tfpluginschema.Request, status tfpluginschema.CacheStatus) {
+			switch status {
+			case tfpluginschema.CacheStatusHit:
+				fmt.Fprintf(os.Stderr, "cache hit: %s/%s %s\n", req.Namespace, req.Name, req.Version)
+			case tfpluginschema.CacheStatusMiss:
+				fmt.Fprintf(os.Stderr, "downloading: %s/%s %s\n", req.Namespace, req.Name, req.Version)
+			}
+		}))
+	}
+	return tfpluginschema.NewServer(logger, opts...)
 }
 
 // printJSON marshals v as indented JSON and writes it to stdout.
@@ -127,7 +157,7 @@ func providerCommand() *cli.Command {
 				Name:  "schema",
 				Usage: "Get the provider configuration schema",
 				Action: func(_ context.Context, cmd *cli.Command) error {
-					s := newServer()
+					s := newServer(cmd)
 					defer s.Cleanup()
 
 					req := requestFromCmd(cmd)
@@ -160,7 +190,7 @@ func resourceCommand() *cli.Command {
 					}
 					resourceName := args.First()
 
-					s := newServer()
+					s := newServer(cmd)
 					defer s.Cleanup()
 
 					req := requestFromCmd(cmd)
@@ -175,7 +205,7 @@ func resourceCommand() *cli.Command {
 				Name:  "list",
 				Usage: "List all resource names",
 				Action: func(_ context.Context, cmd *cli.Command) error {
-					s := newServer()
+					s := newServer(cmd)
 					defer s.Cleanup()
 
 					req := requestFromCmd(cmd)
@@ -209,7 +239,7 @@ func datasourceCommand() *cli.Command {
 					}
 					dsName := args.First()
 
-					s := newServer()
+					s := newServer(cmd)
 					defer s.Cleanup()
 
 					req := requestFromCmd(cmd)
@@ -224,7 +254,7 @@ func datasourceCommand() *cli.Command {
 				Name:  "list",
 				Usage: "List all data source names",
 				Action: func(_ context.Context, cmd *cli.Command) error {
-					s := newServer()
+					s := newServer(cmd)
 					defer s.Cleanup()
 
 					req := requestFromCmd(cmd)
@@ -258,7 +288,7 @@ func functionCommand() *cli.Command {
 					}
 					funcName := args.First()
 
-					s := newServer()
+					s := newServer(cmd)
 					defer s.Cleanup()
 
 					req := requestFromCmd(cmd)
@@ -273,7 +303,7 @@ func functionCommand() *cli.Command {
 				Name:  "list",
 				Usage: "List all function names",
 				Action: func(_ context.Context, cmd *cli.Command) error {
-					s := newServer()
+					s := newServer(cmd)
 					defer s.Cleanup()
 
 					req := requestFromCmd(cmd)
@@ -307,7 +337,7 @@ func ephemeralCommand() *cli.Command {
 					}
 					ephName := args.First()
 
-					s := newServer()
+					s := newServer(cmd)
 					defer s.Cleanup()
 
 					req := requestFromCmd(cmd)
@@ -322,7 +352,7 @@ func ephemeralCommand() *cli.Command {
 				Name:  "list",
 				Usage: "List all ephemeral resource names",
 				Action: func(_ context.Context, cmd *cli.Command) error {
-					s := newServer()
+					s := newServer(cmd)
 					defer s.Cleanup()
 
 					req := requestFromCmd(cmd)
@@ -349,7 +379,7 @@ func versionCommand() *cli.Command {
 				Name:  "list",
 				Usage: "List available versions for the provider",
 				Action: func(_ context.Context, cmd *cli.Command) error {
-					s := newServer()
+					s := newServer(cmd)
 					defer s.Cleanup()
 
 					req := versionsRequestFromCmd(cmd)

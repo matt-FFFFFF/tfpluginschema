@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -25,6 +24,128 @@ const (
 	providerFileNamePrefix = "terraform-provider-"
 	urlPathSeparator       = '/'
 )
+
+// ensureWithinBaseDir returns an error if targetDir is not contained within
+// baseDir once both have been lexically cleaned and symlinks in any existing
+// ancestor of targetDir have been resolved. This protects filesystem
+// operations (os.RemoveAll, os.MkdirAll, extraction) against both lexical
+// escapes ("../") and symlink-based escapes where a path segment inside the
+// cache directory points outside of it.
+func ensureWithinBaseDir(baseDir, targetDir string) error {
+	baseClean := filepath.Clean(baseDir)
+	targetClean := filepath.Clean(targetDir)
+
+	// Lexical check first, cheap and deterministic.
+	rel, err := filepath.Rel(baseClean, targetClean)
+	if err != nil {
+		return fmt.Errorf("failed to evaluate cache path: %w", err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return fmt.Errorf("computed cache path %q escapes cache root %q", targetClean, baseClean)
+	}
+
+	// Resolve symlinks on the base directory. To avoid a TOCTOU race where
+	// another process could create baseDir (or one of its ancestors) as a
+	// symlink between this check and subsequent RemoveAll/MkdirAll/extract
+	// calls, we materialize baseDir up front so EvalSymlinks has something
+	// concrete to resolve.
+	if err := os.MkdirAll(baseClean, 0o755); err != nil {
+		return fmt.Errorf("failed to create cache root %q: %w", baseClean, err)
+	}
+	baseReal, err := filepath.EvalSymlinks(baseClean)
+	if err != nil {
+		return fmt.Errorf("failed to resolve cache root %q: %w", baseClean, err)
+	}
+
+	// Materialize the parent chain of targetClean, walking one segment at
+	// a time from baseClean (which is known to be contained in baseReal
+	// after the MkdirAll+EvalSymlinks above). We intentionally avoid
+	// os.MkdirAll here: it follows symlinks, which would let a
+	// pre-existing symlink in an ancestor segment (e.g.
+	// <base>/opentofu -> /outside) cause directories to be created
+	// outside baseDir before any containment check could reject the
+	// escape. Instead, for each segment we Lstat it: if missing,
+	// os.Mkdir (single level) and then re-Lstat to defeat a TOCTOU
+	// where another process could create the segment as a symlink
+	// between Lstat and Mkdir (Mkdir would return EEXIST and otherwise
+	// leave the loop to happily traverse the attacker-placed link). If
+	// present, we require a real directory (not a symlink, not a file).
+	// Any symlink encountered aborts with an error and leaves the
+	// filesystem outside base untouched.
+	relTarget, err := filepath.Rel(baseClean, targetClean)
+	if err != nil {
+		return fmt.Errorf("failed to compute target path relative to cache root: %w", err)
+	}
+	if relTarget == ".." || strings.HasPrefix(relTarget, ".."+string(filepath.Separator)) || filepath.IsAbs(relTarget) {
+		return fmt.Errorf("resolved cache path %q escapes cache root %q", targetClean, baseClean)
+	}
+	segments := []string{}
+	if relTarget != "." {
+		segments = strings.Split(relTarget, string(filepath.Separator))
+	}
+	// Walk only the parent chain (exclude the leaf itself); the caller is
+	// responsible for creating the leaf.
+	current := baseClean
+	for i := 0; i < len(segments)-1; i++ {
+		current = filepath.Join(current, segments[i])
+		info, lerr := os.Lstat(current)
+		switch {
+		case lerr == nil:
+			if info.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("cache path segment %q is a symlink; refusing to traverse", current)
+			}
+			if !info.IsDir() {
+				return fmt.Errorf("cache path segment %q exists and is not a directory", current)
+			}
+		case os.IsNotExist(lerr):
+			if err := os.Mkdir(current, 0o755); err != nil {
+				if !os.IsExist(err) {
+					return fmt.Errorf("failed to create cache path segment %q: %w", current, err)
+				}
+				// Another process created this segment between our
+				// Lstat and Mkdir. Re-Lstat and re-validate that the
+				// raced-in entry is a real directory and not a
+				// symlink pointing outside the cache root.
+				raced, rerr := os.Lstat(current)
+				if rerr != nil {
+					return fmt.Errorf("failed to re-stat cache path segment %q after EEXIST: %w", current, rerr)
+				}
+				if raced.Mode()&os.ModeSymlink != 0 {
+					return fmt.Errorf("cache path segment %q is a symlink; refusing to traverse", current)
+				}
+				if !raced.IsDir() {
+					return fmt.Errorf("cache path segment %q exists and is not a directory", current)
+				}
+			}
+		default:
+			return fmt.Errorf("failed to stat cache path segment %q: %w", current, lerr)
+		}
+	}
+
+	// Finally, if the leaf itself already exists, make sure it (and by
+	// extension its resolved location) is still contained within
+	// baseReal; this catches the case where the leaf was created as a
+	// symlink by another process before we were called.
+	if leafInfo, lerr := os.Lstat(targetClean); lerr == nil {
+		if leafInfo.Mode()&os.ModeSymlink != 0 {
+			resolved, rerr := filepath.EvalSymlinks(targetClean)
+			if rerr != nil {
+				return fmt.Errorf("failed to resolve cache path leaf %q: %w", targetClean, rerr)
+			}
+			rel2, rerr := filepath.Rel(baseReal, resolved)
+			if rerr != nil {
+				return fmt.Errorf("failed to evaluate resolved cache leaf: %w", rerr)
+			}
+			if rel2 == ".." || strings.HasPrefix(rel2, ".."+string(filepath.Separator)) || filepath.IsAbs(rel2) {
+				return fmt.Errorf("resolved cache path %q escapes cache root %q (symlink)", resolved, baseReal)
+			}
+		}
+	} else if !os.IsNotExist(lerr) {
+		return fmt.Errorf("failed to stat cache path leaf %q: %w", targetClean, lerr)
+	}
+
+	return nil
+}
 
 // RegistryType represents the type of provider registry to use.
 type RegistryType string
@@ -69,6 +190,9 @@ type Request struct {
 // "https://{registry}/v1/providers/{namespace}/{name}/{version}/download/{os}/{arch}"
 // where {registry} is either registry.opentofu.org (default) or registry.terraform.io.
 // This format is used to construct the URL for downloading the plugin.
+// Note: String is a best-effort representation. Server.Get validates the
+// request's components before constructing the URL, so callers using the
+// public Server API do not need to pre-validate Request fields.
 func (r Request) String() string {
 	sb := strings.Builder{}
 	sb.WriteString(r.RegistryType.BaseURL())
@@ -82,11 +206,7 @@ func (r Request) String() string {
 	sb.WriteString(runtime.GOOS)
 	sb.WriteRune(urlPathSeparator)
 	sb.WriteString(runtime.GOARCH)
-	result := sb.String()
-	if _, err := url.Parse(result); err != nil {
-		panic(fmt.Sprintf("failed to parse URL: %s, error: %v", result, err))
-	}
-	return result
+	return sb.String()
 }
 
 func (r Request) fixedVersion() bool {
@@ -120,17 +240,23 @@ type versionsCache map[VersionsRequest]goversion.Collection
 
 // Server is a struct that manages the plugin download and caching process.
 type Server struct {
-	tmpDir    string
-	dlc       downloadCache
-	sc        schemaCache
-	l         *slog.Logger
-	versionsc versionsCache
-	mu        *sync.RWMutex
+	tmpDir        string
+	dlc           downloadCache
+	sc            schemaCache
+	l             *slog.Logger
+	versionsc     versionsCache
+	mu            *sync.RWMutex
+	cacheDir      string
+	forceFetch    bool
+	cacheStatusFn CacheStatusFunc
+	httpClient    *http.Client
 }
 
-// NewServer creates a new Server instance with an optional logger.
+// NewServer creates a new Server instance with an optional logger and zero or
+// more ServerOption values for customization (cache directory, force fetch,
+// cache-status callback, ...).
 // If no logger is provided, it defaults to a logger that discards all logs.
-func NewServer(l *slog.Logger) *Server {
+func NewServer(l *slog.Logger, opts ...ServerOption) *Server {
 	if l == nil {
 		l = slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{
 			Level:     slog.LevelError,
@@ -138,13 +264,26 @@ func NewServer(l *slog.Logger) *Server {
 		}))
 	}
 	l.Info("Creating new server instance")
-	return &Server{
-		dlc:       make(downloadCache),
-		sc:        make(schemaCache),
-		l:         l,
-		versionsc: make(versionsCache),
-		mu:        &sync.RWMutex{},
+	s := &Server{
+		dlc:        make(downloadCache),
+		sc:         make(schemaCache),
+		l:          l,
+		versionsc:  make(versionsCache),
+		mu:         &sync.RWMutex{},
+		cacheDir:   defaultCacheDir(),
+		httpClient: http.DefaultClient,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	l.Debug("Server configured", "cache_dir", s.cacheDir, "force_fetch", s.forceFetch)
+	return s
+}
+
+// CacheDir returns the root directory used by the Server to cache downloaded
+// providers.
+func (s *Server) CacheDir() string {
+	return s.cacheDir
 }
 
 func (s *Server) readSchema(request Request) (*tfjson.ProviderSchema, error) {
@@ -167,19 +306,135 @@ func (s *Server) readSchema(request Request) (*tfjson.ProviderSchema, error) {
 	return resp, nil
 }
 
-// Cleanup removes the temporary directory used for plugin downloads.
+// Cleanup removes the Server's in-memory state and any legacy temporary
+// directory used for plugin downloads.
 func (s *Server) Cleanup() {
-	s.l.Info("Cleaning up temporary directory", "dir", s.tmpDir)
-	os.RemoveAll(s.tmpDir)
+	s.mu.Lock()
+	tmpDir := s.tmpDir
+	clear(s.dlc)
+	clear(s.sc)
+	clear(s.versionsc)
+	s.tmpDir = ""
+	s.mu.Unlock()
+
+	s.l.Info("Cleaning up temporary directory", "dir", tmpDir)
+	os.RemoveAll(tmpDir)
+}
+
+// validateProviderFileName ensures the filename reported by the registry is a
+// safe, simple basename before it is joined with s.tmpDir. Rejects empty
+// names, anything containing a path separator (forward or back slash), any
+// "." / ".." traversal component, NUL bytes, or absolute paths. Keeps the
+// checks conservative — registry filenames in practice are of the form
+// "terraform-provider-<name>_<version>_<os>_<arch>.zip".
+func validateProviderFileName(name string) error {
+	if name == "" {
+		return fmt.Errorf("filename must not be empty")
+	}
+	if strings.ContainsAny(name, "/\\\x00:") {
+		return fmt.Errorf("filename %q must not contain path separators, drive/stream separators, or NUL bytes", name)
+	}
+	if name == "." || name == ".." {
+		return fmt.Errorf("filename %q is not a valid basename", name)
+	}
+	if filepath.IsAbs(name) || filepath.Base(name) != name {
+		return fmt.Errorf("filename %q must be a simple basename", name)
+	}
+	if filepath.VolumeName(name) != "" {
+		return fmt.Errorf("filename %q must not contain a volume/drive name", name)
+	}
+	return nil
+}
+
+// validateCachePathComponent validates a single Request field used both as a
+// URL path segment and as an on-disk cache path segment. When required is
+// true an empty value is rejected; otherwise an empty value is allowed (used
+// for Version, which may be empty to mean "latest").
+//
+// Values must only contain characters from a conservative URL-safe set:
+// ASCII letters, digits, and the unreserved punctuation "-", "_", ".", "+",
+// "~". This avoids having to URL-escape segments when constructing registry
+// URLs via Request.String(), and rejects characters (like "?", "#", "%",
+// "/", or whitespace) that would change URL semantics or escape the cache
+// root on disk.
+func validateCachePathComponent(name, value string, required bool) error {
+	if value == "" {
+		if required {
+			return fmt.Errorf("%s must not be empty", name)
+		}
+		return nil
+	}
+
+	if filepath.IsAbs(value) {
+		return fmt.Errorf("%s must not be an absolute path", name)
+	}
+
+	for _, r := range value {
+		switch {
+		case r >= 'A' && r <= 'Z':
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9':
+		case r == '-' || r == '_' || r == '.' || r == '+' || r == '~':
+		default:
+			return fmt.Errorf("%s contains invalid character %q (allowed: letters, digits, '-', '_', '.', '+', '~')", name, r)
+		}
+	}
+
+	cleaned := filepath.Clean(value)
+	if cleaned != value || cleaned == "." || cleaned == ".." {
+		return fmt.Errorf("%s contains invalid path content", name)
+	}
+
+	return nil
+}
+
+// validateCacheRequestIdentity validates the request fields that identify the
+// provider (namespace, name). Version is not validated here — it may still be
+// a constraint like "~>2.1" at this point and is validated once resolved by
+// fixVersion.
+func (s *Server) validateCacheRequestIdentity(request Request) error {
+	if err := validateCachePathComponent("namespace", request.Namespace, true); err != nil {
+		return err
+	}
+	if err := validateCachePathComponent("name", request.Name, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateCacheRequestVersion validates that a concrete, resolved provider
+// version is safe to use as a URL path and on-disk cache segment. It must be
+// called after fixVersion, never on a user-supplied constraint.
+func (s *Server) validateCacheRequestVersion(request Request) error {
+	return validateCachePathComponent("version", request.Version, true)
 }
 
 // Get retrieves the plugin for the specified request, downloading it if necessary.
 // The GetXxx methods (GetResourceSchema, GetDataSourceSchema, etc.) will call this method anyway,
 // so it is not necessary to call Get directly unless you want to ensure the plugin is downloaded first.
-// It is stored in a temporary directory and cached for future use.
-// Make sure to call Cleanup() to remove the temporary files.
+//
+// Providers are extracted into a predictable on-disk cache (see CacheDir and
+// the TFPLUGINSCHEMA_CACHE_DIR environment variable). Subsequent calls for the
+// same provider/version/os/arch are served from the cache. Pass
+// WithForceFetch(true) to NewServer to bypass the cache and always download.
+// Cleanup() removes only the Server's in-memory state and any legacy temp
+// directory; the persistent cache is preserved across runs.
 func (s *Server) Get(request Request) error {
-	l := s.l.With("request_namespace", request.Namespace, "request_name", request.Name, "request_version", request.Version)
+	if err := s.validateCacheRequestIdentity(request); err != nil {
+		return fmt.Errorf("invalid provider request: %w", err)
+	}
+
+	// Normalize RegistryType so that empty/unknown values share the same
+	// map key (and therefore the same in-memory dlc/sc entries) as
+	// RegistryTypeOpenTofu, matching the behavior of BaseURL() and the
+	// on-disk cache layout. Without this, callers passing an empty/unknown
+	// RegistryType would miss the in-memory cache even when an equivalent
+	// OpenTofu-keyed entry already exists.
+	request.RegistryType = normalizedRegistryType(request.RegistryType)
+
+	var notifyRequest Request
+	var notifyStatus CacheStatus
+	var shouldNotify bool
 
 	if !request.fixedVersion() {
 		var err error
@@ -189,6 +444,17 @@ func (s *Server) Get(request Request) error {
 		}
 	}
 
+	// The (possibly resolved) version is now used for URL/cache-path
+	// construction, so it must be URL/path safe.
+	if err := s.validateCacheRequestVersion(request); err != nil {
+		return fmt.Errorf("invalid provider request: %w", err)
+	}
+
+	// Build the request-scoped logger *after* fixVersion, so that logs
+	// carry the concrete resolved version rather than the caller-supplied
+	// constraint (e.g. "~>2.1").
+	l := s.l.With("request_namespace", request.Namespace, "request_name", request.Name, "request_version", request.Version)
+
 	s.mu.RLock()
 	if _, exists := s.dlc[request]; exists {
 		l.Info("Request already exists in download cache")
@@ -197,17 +463,53 @@ func (s *Server) Get(request Request) error {
 	}
 	s.mu.RUnlock()
 
-	// Lock for the download and extraction process to avoid multiple downloads of the same plugin
+	// Lock for the download and extraction process to avoid multiple downloads of the same plugin.
+	// The cache-status callback reference is captured under the lock and
+	// invoked *after* the lock is released, so user callbacks may safely
+	// call back into the Server without deadlocking.
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	var notifyFn CacheStatusFunc
+	defer func() {
+		s.mu.Unlock()
+		if shouldNotify && notifyFn != nil {
+			s.notifyCacheStatusWith(notifyFn, notifyRequest, notifyStatus)
+		}
+	}()
+
+	// Re-check after acquiring the write lock: another goroutine may have
+	// populated the cache between the RUnlock above and Lock here.
+	if _, exists := s.dlc[request]; exists {
+		l.Info("Request already exists in download cache")
+		return nil
+	}
+
+	// Check the persistent on-disk cache first (unless force-fetch is set).
+	extractDir := cacheProviderDir(s.cacheDir, request)
+	if err := ensureWithinBaseDir(s.cacheDir, extractDir); err != nil {
+		return err
+	}
+
+	if !s.forceFetch {
+		if path, ok := findProviderBinary(extractDir, request.Name); ok {
+			l.Info("Provider cache hit", "path", path, "cache_dir", s.cacheDir)
+			s.dlc[request] = path
+			notifyRequest, notifyStatus, shouldNotify = request, CacheStatusHit, true
+			notifyFn = s.cacheStatusFn
+			return nil
+		}
+	}
+
+	l.Info("Provider cache miss, downloading", "cache_dir", s.cacheDir, "force_fetch", s.forceFetch)
+	notifyRequest, notifyStatus, shouldNotify = request, CacheStatusMiss, true
+	notifyFn = s.cacheStatusFn
 
 	registryApiRequest, err := http.NewRequest(http.MethodGet, request.String(), nil)
-	l.Debug("Sending request to registry API", "url", registryApiRequest.URL.String())
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP request for registry API: %w", err)
 	}
+	l.Debug("Sending request to registry API", "url", registryApiRequest.URL.String())
 
-	resp, err := http.DefaultClient.Do(registryApiRequest)
+	resp, err := s.httpClient.Do(registryApiRequest)
 	if err != nil {
 		return fmt.Errorf("failed to send HTTP request to registry API: %w", err)
 	}
@@ -228,6 +530,22 @@ func (s *Server) Get(request Request) error {
 
 	l.Info("Plugin API response received", "arch", pluginResponse.Arch, "os", pluginResponse.OS, "filename", pluginResponse.FileName, "download_url", pluginResponse.DownloadURL)
 
+	// Sanitize the filename reported by the registry before using it as a
+	// local filesystem path component. It must be a simple base name with no
+	// path separators or traversal; anything else is rejected to avoid
+	// writing outside s.tmpDir if the registry response is malicious or
+	// corrupted.
+	if err := validateProviderFileName(pluginResponse.FileName); err != nil {
+		return fmt.Errorf("invalid plugin filename from registry: %w", err)
+	}
+
+	downloadURL := pluginResponse.DownloadURL
+	if downloadURL == "" {
+		return fmt.Errorf("download URL is empty for request: %s", request.String())
+	}
+
+	// Create a temp directory for the download so that partial downloads do not
+	// corrupt the persistent cache.
 	if s.tmpDir == "" {
 		tmpFile, err := os.MkdirTemp("", "tfpluginschema-")
 		if err != nil {
@@ -236,17 +554,12 @@ func (s *Server) Get(request Request) error {
 		s.tmpDir = tmpFile
 	}
 
-	downloadURL := pluginResponse.DownloadURL
-	if downloadURL == "" {
-		return fmt.Errorf("download URL is empty for request: %s", request.String())
-	}
-
 	downloadRequest, err := http.NewRequest(http.MethodGet, downloadURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP request for plugin download: %w", err)
 	}
 
-	resp, err = http.DefaultClient.Do(downloadRequest)
+	resp, err = s.httpClient.Do(downloadRequest)
 	if err != nil {
 		return fmt.Errorf("failed to download plugin: %w", err)
 	}
@@ -264,22 +577,92 @@ func (s *Server) Get(request Request) error {
 		return fmt.Errorf("failed to create plugin file: %w", err)
 	}
 
-	defer file.Close()
+	// Ensure the downloaded archive is removed once we're done with it;
+	// otherwise s.tmpDir can accumulate zip files for long-lived processes.
+	defer os.Remove(pluginFilePath)
 
 	if _, err := file.ReadFrom(resp.Body); err != nil {
+		file.Close()
 		return fmt.Errorf("failed to read plugin data into file: %w", err)
 	}
-
-	// unzip the file
-	extractDir := strings.TrimSuffix(pluginResponse.FileName, filepath.Ext(pluginResponse.FileName)) // Remove extension for directory name
-	extractDir = filepath.Join(s.tmpDir, extractDir)
-
-	if err := os.Mkdir(extractDir, 0755); err != nil {
-		return fmt.Errorf("failed to create extraction directory: %w", err)
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("failed to close plugin file: %w", err)
 	}
 
-	if err := unzip(pluginFilePath, extractDir); err != nil {
+	// Extract atomically: unzip into a sibling staging directory, then rename
+	// into place. This ensures concurrent readers never observe a partial
+	// cache entry (findProviderBinary would otherwise treat a half-populated
+	// directory as a cache hit). If a previous run left a partial staging
+	// directory behind, clear it first.
+	stagingDir := extractDir + ".partial"
+	if err := ensureWithinBaseDir(s.cacheDir, stagingDir); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(stagingDir); err != nil {
+		return fmt.Errorf("failed to clear staging directory %s: %w", stagingDir, err)
+	}
+	// Create the staging leaf symlink-safely. Use os.Mkdir (not MkdirAll,
+	// which would follow a raced-in symlink at the leaf path) so the call
+	// fails with EEXIST if anything is created at stagingDir between the
+	// RemoveAll above and this Mkdir. Then Lstat to confirm we created a
+	// real directory (not a symlink). The parent chain has already been
+	// materialized symlink-safely by ensureWithinBaseDir above.
+	if err := os.Mkdir(stagingDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create staging directory %s: %w", stagingDir, err)
+	}
+	if info, err := os.Lstat(stagingDir); err != nil {
+		return fmt.Errorf("failed to stat staging directory %s: %w", stagingDir, err)
+	} else if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("staging directory %s is not a real directory", stagingDir)
+	}
+	// Ensure we don't leave a partial staging directory behind on any error
+	// path below. On success the RemoveAll after Rename is a no-op.
+	defer os.RemoveAll(stagingDir)
+
+	if err := unzip(pluginFilePath, stagingDir); err != nil {
 		return fmt.Errorf("failed to unzip plugin file: %w", err)
+	}
+
+	// Publish the staging directory into the cache atomically. To stay
+	// readable for any concurrent reader (and to avoid hard failures on
+	// platforms like Windows where in-use binaries can prevent removal of
+	// the existing cache entry), first move any existing entry aside on a
+	// best-effort basis, rename the staging dir into place, and only then
+	// remove the old entry. Readers either see the previous valid entry or
+	// the newly published one — never a partially-replaced directory.
+	//
+	// Note: we intentionally do NOT os.MkdirAll(filepath.Dir(extractDir))
+	// here. ensureWithinBaseDir(s.cacheDir, stagingDir) above already
+	// materialized the shared parent chain of stagingDir/extractDir using
+	// a symlink-safe, segment-by-segment walk. Calling MkdirAll here
+	// would re-introduce symlink-following and a fresh TOCTOU window.
+	oldDir := extractDir + ".old"
+	// Best-effort: clear any leftover ".old" from a previous interrupted run.
+	_ = os.RemoveAll(oldDir)
+	movedAside := false
+	if _, statErr := os.Lstat(extractDir); statErr == nil {
+		if err := os.Rename(extractDir, oldDir); err != nil {
+			// Couldn't move aside (e.g. in-use on Windows). Fall back to
+			// removing in place; any failure here surfaces as before.
+			if rmErr := os.RemoveAll(extractDir); rmErr != nil {
+				return fmt.Errorf("failed to clear cache directory %s: %w", extractDir, rmErr)
+			}
+		} else {
+			movedAside = true
+		}
+	}
+	if err := os.Rename(stagingDir, extractDir); err != nil {
+		// Try to restore the previous cache entry so we don't leave the
+		// cache empty on a publish failure.
+		if movedAside {
+			_ = os.Rename(oldDir, extractDir)
+		}
+		return fmt.Errorf("failed to publish cache directory %s: %w", extractDir, err)
+	}
+	if movedAside {
+		// Best-effort cleanup of the previous entry; failures here only
+		// leak disk space and don't affect correctness of the cache.
+		_ = os.RemoveAll(oldDir)
 	}
 
 	// check the extracted directory
@@ -315,6 +698,23 @@ func (s *Server) Get(request Request) error {
 	}
 
 	return nil
+}
+
+// notifyCacheStatusWith invokes the provided cache-status callback. The
+// callback reference must be captured under the Server lock and this helper
+// must be called *after* releasing the lock, so user callbacks may safely
+// call back into the Server without deadlocking. Panics from user callbacks
+// are recovered so they do not break the Server.
+func (s *Server) notifyCacheStatusWith(fn CacheStatusFunc, request Request, status CacheStatus) {
+	if fn == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			s.l.Error("cache status callback panicked", "panic", r)
+		}
+	}()
+	fn(request, status)
 }
 
 // GetResourceSchema retrieves the schema for a specific resource from the provider.
@@ -476,6 +876,11 @@ func (s *Server) getSchema(request Request) (*tfjson.ProviderSchema, error) {
 		return nil, fmt.Errorf("version must be fixed before getting schema")
 	}
 
+	// Normalize RegistryType so the in-memory schema cache (s.sc) and
+	// download cache (s.dlc) share the same key for empty/unknown values
+	// as RegistryTypeOpenTofu. Server.Get performs the same normalization.
+	request.RegistryType = normalizedRegistryType(request.RegistryType)
+
 	s.mu.RLock()
 	if resp, exists := s.sc[request]; exists {
 		s.mu.RUnlock()
@@ -545,8 +950,9 @@ func (s *Server) getSchema(request Request) (*tfjson.ProviderSchema, error) {
 // latestVersionOf returns the latest version from the provided collection that matches the given constraints.
 func (s *Server) latestVersionOf(request Request) (string, error) {
 	vers, err := s.GetAvailableVersions(VersionsRequest{
-		Namespace: request.Namespace,
-		Name:      request.Name,
+		Namespace:    request.Namespace,
+		Name:         request.Name,
+		RegistryType: request.RegistryType,
 	})
 
 	if err != nil {

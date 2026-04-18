@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"slices"
 	"strings"
 
@@ -27,6 +26,10 @@ type VersionsRequest struct {
 	RegistryType RegistryType // Registry to use (defaults to OpenTofu if not specified)
 }
 
+// String returns a best-effort URL for the versions endpoint. It does not
+// panic on invalid input; callers using the public Server API go through
+// validateVersionsRequest, which rejects unsafe namespace/name values before
+// a URL is ever constructed.
 func (v VersionsRequest) String() string {
 	sb := strings.Builder{}
 	sb.WriteString(v.RegistryType.BaseURL())
@@ -36,17 +39,35 @@ func (v VersionsRequest) String() string {
 	sb.WriteString(v.Name)
 	sb.WriteRune(urlPathSeparator)
 	sb.WriteString(pluginApiVersions)
-	result := sb.String()
-	if _, err := url.Parse(result); err != nil {
-		panic(fmt.Sprintf("failed to parse URL: %s, error: %v", result, err))
+	return sb.String()
+}
+
+// validateVersionsRequest ensures namespace/name are non-empty and URL/path
+// safe. It mirrors the identity-validation rules applied by Server.Get so
+// that VersionsRequest.String() segments never need URL-escaping and can't
+// alter URL semantics.
+func validateVersionsRequest(req VersionsRequest) error {
+	if err := validateCachePathComponent("namespace", req.Namespace, true); err != nil {
+		return err
 	}
-	return result
+	return validateCachePathComponent("name", req.Name, true)
 }
 
 // GetAvailableVersions fetches the available versions for the given provider from the plugin registry.
 // It caches the results to avoid redundant network calls.
 // It returns a sorted collection of versions.
 func (s *Server) GetAvailableVersions(req VersionsRequest) (goversion.Collection, error) {
+	if err := validateVersionsRequest(req); err != nil {
+		return nil, fmt.Errorf("invalid versions request: %w", err)
+	}
+
+	// Normalize RegistryType so empty/unknown values share the same
+	// cache key as the registry they actually resolve to via BaseURL
+	// (OpenTofu). Without this, a caller passing an unknown RegistryType
+	// would still hit OpenTofu but cache under a distinct key, producing
+	// avoidable cache misses and duplicate network calls.
+	req.RegistryType = normalizedRegistryType(req.RegistryType)
+
 	l := s.l.With("request_namespace", req.Namespace, "request_name", req.Name)
 
 	s.mu.RLock()
@@ -64,7 +85,7 @@ func (s *Server) GetAvailableVersions(req VersionsRequest) (goversion.Collection
 		return nil, fmt.Errorf("failed to create request for versions: %w", err)
 	}
 
-	resp, err := http.DefaultClient.Do(versionRequest)
+	resp, err := s.httpClient.Do(versionRequest)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get versions: %w", err)
 	}

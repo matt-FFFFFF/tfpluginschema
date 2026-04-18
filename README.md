@@ -200,12 +200,63 @@ The universal client interface abstracts away the protocol differences, providin
 
 ## Caching
 
-The library implements two levels of caching:
+The library implements three levels of caching:
 
-1. **Download Cache**: Prevents re-downloading the same provider version
-2. **Schema Cache**: Caches retrieved schemas to avoid repeated RPC calls
+1. **Persistent on-disk provider cache**: Downloaded provider binaries are
+   stored on disk in a predictable layout and reused across runs.
+2. **In-memory download cache**: Prevents redundant work within a single
+   `Server` instance.
+3. **Schema cache**: Caches retrieved schemas to avoid repeated RPC calls.
 
-Caches are automatically managed and cleared when the server is cleaned up.
+The on-disk cache is preserved across runs. The in-memory caches are scoped
+to the lifetime of a `Server` instance.
+
+### Provider cache layout
+
+Downloaded providers are extracted into a registry-qualified, namespaced path:
+
+```
+<cacheDir>/<registry-type>/<namespace>/terraform-provider-<name>/<version>/<os>_<arch>/
+```
+
+Where `<registry-type>` is `opentofu` or `terraform` (from `Request.RegistryType`).
+Including the registry type and namespace avoids collisions between providers
+with the same name and version published by different namespaces or registries.
+
+The default `<cacheDir>` is `os.UserCacheDir()/tfpluginschema` (for example
+`~/.cache/tfpluginschema` on Linux). It can be overridden with:
+
+- The `TFPLUGINSCHEMA_CACHE_DIR` environment variable.
+- The `--cache-dir` CLI flag.
+- The `tfpluginschema.WithCacheDir("/path")` option to `NewServer`.
+
+### Bypassing the cache
+
+To always re-download providers, use:
+
+- The `--force-fetch` CLI flag.
+- The `tfpluginschema.WithForceFetch(true)` option passed to `NewServer`.
+
+Current public API notes:
+
+- `NewServer(l *slog.Logger, opts ...ServerOption) *Server` accepts a logger
+  and zero or more `ServerOption` values.
+- `Request` includes `RegistryType` in addition to provider-identifying fields
+  such as namespace, name, and version.
+
+### Observing cache hits / misses
+
+The CLI prints `cache hit:` or `downloading:` messages to stderr for each
+request. Pass `--quiet` to suppress them. Library users can register a
+callback to observe the same signal:
+
+```go
+server := tfpluginschema.NewServer(nil,
+    tfpluginschema.WithCacheStatusFunc(func(req tfpluginschema.Request, status tfpluginschema.CacheStatus) {
+        log.Printf("%s: %s/%s %s", status, req.Namespace, req.Name, req.Version)
+    }),
+)
+```
 
 ## Error Handling
 
@@ -238,7 +289,7 @@ Contributions are welcome! Please ensure that:
 ## Notes
 
 - The library uses the OpenTofu registry (`https://registry.opentofu.org`) by default
-- Temporary files are automatically cleaned up when `Server.Cleanup()` is called
+- Temporary files and legacy temporary directories are cleaned up when `Server.Cleanup()` is called
 - The library handles cross-platform provider downloads automatically
 - Base64-encoded type information in schemas is automatically decoded for easier consumption
 
