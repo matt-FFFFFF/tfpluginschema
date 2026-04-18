@@ -252,7 +252,7 @@ func TestRequest_fixVersion(t *testing.T) {
 			},
 			setupServer: func(s *Server) {
 				// Mock the versions response
-				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws"}] = mustVersions([]string{"1.0.0", "1.1.0", "2.0.0"})
+				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws", RegistryType: RegistryTypeOpenTofu}] = mustVersions([]string{"1.0.0", "1.1.0", "2.0.0"})
 			},
 			expectedResult: Request{
 				Namespace: "hashicorp",
@@ -270,7 +270,7 @@ func TestRequest_fixVersion(t *testing.T) {
 			},
 			setupServer: func(s *Server) {
 				// Mock the versions response
-				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws"}] = mustVersions([]string{"0.9.0", "1.0.0", "1.5.0", "2.0.0", "2.1.0"})
+				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws", RegistryType: RegistryTypeOpenTofu}] = mustVersions([]string{"0.9.0", "1.0.0", "1.5.0", "2.0.0", "2.1.0"})
 			},
 			expectedResult: Request{
 				Namespace: "hashicorp",
@@ -288,7 +288,7 @@ func TestRequest_fixVersion(t *testing.T) {
 			},
 			setupServer: func(s *Server) {
 				// Mock the versions response
-				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws"}] = mustVersions([]string{"1.0.0", "1.1.0", "1.1.5", "1.2.0", "2.0.0"})
+				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws", RegistryType: RegistryTypeOpenTofu}] = mustVersions([]string{"1.0.0", "1.1.0", "1.1.5", "1.2.0", "2.0.0"})
 			},
 			expectedResult: Request{
 				Namespace: "hashicorp",
@@ -306,7 +306,7 @@ func TestRequest_fixVersion(t *testing.T) {
 			},
 			setupServer: func(s *Server) {
 				// Mock the versions response
-				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws"}] = mustVersions([]string{"1.0.0", "1.1.0"})
+				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws", RegistryType: RegistryTypeOpenTofu}] = mustVersions([]string{"1.0.0", "1.1.0"})
 			},
 			expectedResult: Request{
 				Namespace: "hashicorp",
@@ -324,7 +324,7 @@ func TestRequest_fixVersion(t *testing.T) {
 			},
 			setupServer: func(s *Server) {
 				// Mock the versions response
-				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws"}] = mustVersions([]string{"1.0.0", "1.1.0", "1.1.5", "1.2.0", "2.0.0"})
+				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws", RegistryType: RegistryTypeOpenTofu}] = mustVersions([]string{"1.0.0", "1.1.0", "1.1.5", "1.2.0", "2.0.0"})
 			},
 			expectedResult: Request{
 				Namespace: "hashicorp",
@@ -342,7 +342,7 @@ func TestRequest_fixVersion(t *testing.T) {
 			},
 			setupServer: func(s *Server) {
 				// Mock the versions response with no matching versions
-				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws"}] = mustVersions([]string{"1.0.0", "2.0.0", "3.0.0"})
+				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws", RegistryType: RegistryTypeOpenTofu}] = mustVersions([]string{"1.0.0", "2.0.0", "3.0.0"})
 			},
 			expectedResult: Request{},
 			expectedError:  "failed to get latest version",
@@ -403,7 +403,7 @@ func TestRequest_fixVersion(t *testing.T) {
 			},
 			setupServer: func(s *Server) {
 				// Mock the versions response
-				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws"}] = mustVersions([]string{"1.0.0", "1.1.0", "1.2.0"})
+				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws", RegistryType: RegistryTypeOpenTofu}] = mustVersions([]string{"1.0.0", "1.1.0", "1.2.0"})
 			},
 			expectedResult: Request{
 				Namespace: "hashicorp",
@@ -421,7 +421,7 @@ func TestRequest_fixVersion(t *testing.T) {
 			},
 			setupServer: func(s *Server) {
 				// Mock the versions response
-				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws"}] = mustVersions([]string{"0.9.0", "1.0.0", "1.2.0", "1.3.0", "1.4.0", "2.0.0"})
+				s.versionsc[VersionsRequest{Namespace: "hashicorp", Name: "aws", RegistryType: RegistryTypeOpenTofu}] = mustVersions([]string{"0.9.0", "1.0.0", "1.2.0", "1.3.0", "1.4.0", "2.0.0"})
 			},
 			expectedResult: Request{
 				Namespace: "hashicorp",

@@ -61,6 +61,13 @@ func (s *Server) GetAvailableVersions(req VersionsRequest) (goversion.Collection
 		return nil, fmt.Errorf("invalid versions request: %w", err)
 	}
 
+	// Normalize RegistryType so empty/unknown values share the same
+	// cache key as the registry they actually resolve to via BaseURL
+	// (OpenTofu). Without this, a caller passing an unknown RegistryType
+	// would still hit OpenTofu but cache under a distinct key, producing
+	// avoidable cache misses and duplicate network calls.
+	req.RegistryType = normalizedRegistryType(req.RegistryType)
+
 	l := s.l.With("request_namespace", req.Namespace, "request_name", req.Name)
 
 	s.mu.RLock()

@@ -58,15 +58,20 @@ func ensureWithinBaseDir(baseDir, targetDir string) error {
 	}
 
 	// Materialize the parent chain of targetClean, walking one segment at
-	// a time from baseReal. We intentionally avoid os.MkdirAll here: it
-	// follows symlinks, which would let a pre-existing symlink in an
-	// ancestor segment (e.g. <base>/opentofu -> /outside) cause
-	// directories to be created outside baseDir before any containment
-	// check could reject the escape. Instead, for each segment we Lstat
-	// it: if missing, os.Mkdir (single level); if present, require a real
-	// directory (not a symlink, not a file). Any symlink encountered
-	// aborts with an error and leaves the filesystem outside base
-	// untouched.
+	// a time from baseClean (which is known to be contained in baseReal
+	// after the MkdirAll+EvalSymlinks above). We intentionally avoid
+	// os.MkdirAll here: it follows symlinks, which would let a
+	// pre-existing symlink in an ancestor segment (e.g.
+	// <base>/opentofu -> /outside) cause directories to be created
+	// outside baseDir before any containment check could reject the
+	// escape. Instead, for each segment we Lstat it: if missing,
+	// os.Mkdir (single level) and then re-Lstat to defeat a TOCTOU
+	// where another process could create the segment as a symlink
+	// between Lstat and Mkdir (Mkdir would return EEXIST and otherwise
+	// leave the loop to happily traverse the attacker-placed link). If
+	// present, we require a real directory (not a symlink, not a file).
+	// Any symlink encountered aborts with an error and leaves the
+	// filesystem outside base untouched.
 	relTarget, err := filepath.Rel(baseClean, targetClean)
 	if err != nil {
 		return fmt.Errorf("failed to compute target path relative to cache root: %w", err)
@@ -93,8 +98,24 @@ func ensureWithinBaseDir(baseDir, targetDir string) error {
 				return fmt.Errorf("cache path segment %q exists and is not a directory", current)
 			}
 		case os.IsNotExist(lerr):
-			if err := os.Mkdir(current, 0o755); err != nil && !os.IsExist(err) {
-				return fmt.Errorf("failed to create cache path segment %q: %w", current, err)
+			if err := os.Mkdir(current, 0o755); err != nil {
+				if !os.IsExist(err) {
+					return fmt.Errorf("failed to create cache path segment %q: %w", current, err)
+				}
+				// Another process created this segment between our
+				// Lstat and Mkdir. Re-Lstat and re-validate that the
+				// raced-in entry is a real directory and not a
+				// symlink pointing outside the cache root.
+				raced, rerr := os.Lstat(current)
+				if rerr != nil {
+					return fmt.Errorf("failed to re-stat cache path segment %q after EEXIST: %w", current, rerr)
+				}
+				if raced.Mode()&os.ModeSymlink != 0 {
+					return fmt.Errorf("cache path segment %q is a symlink; refusing to traverse", current)
+				}
+				if !raced.IsDir() {
+					return fmt.Errorf("cache path segment %q exists and is not a directory", current)
+				}
 			}
 		default:
 			return fmt.Errorf("failed to stat cache path segment %q: %w", current, lerr)
