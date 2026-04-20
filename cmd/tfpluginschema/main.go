@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	tfjson "github.com/hashicorp/terraform-json"
 	cli "github.com/urfave/cli/v3"
 
 	"github.com/matt-FFFFFF/tfpluginschema"
@@ -33,20 +34,20 @@ func buildRootCommand() *cli.Command {
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:     "namespace",
-				Aliases:  []string{"n"},
+				Aliases:  []string{"ns"},
 				Usage:    "Provider namespace (e.g. hashicorp, Azure)",
 				Required: true,
 			},
 			&cli.StringFlag{
 				Name:     "name",
-				Aliases:  []string{"p"},
+				Aliases:  []string{"n"},
 				Usage:    "Provider name (e.g. aws, azapi)",
 				Required: true,
 			},
 			&cli.StringFlag{
-				Name:    "provider-version",
-				Aliases: []string{"pv"},
-				Usage:   "Provider version or constraint (e.g. 2.5.0, ~>2.1). Empty for latest",
+				Name:    "version-constraint",
+				Aliases: []string{"vc"},
+				Usage:   "Version or constraint (e.g. 2.5.0, ~>2.1). Empty for latest",
 			},
 			&cli.StringFlag{
 				Name:    "registry",
@@ -84,7 +85,7 @@ func requestFromCmd(cmd *cli.Command) tfpluginschema.Request {
 	return tfpluginschema.Request{
 		Namespace:    cmd.String("namespace"),
 		Name:         cmd.String("name"),
-		Version:      cmd.String("provider-version"),
+		Version:      cmd.String("version-constraint"),
 		RegistryType: registryTypeFromString(cmd.String("registry")),
 	}
 }
@@ -181,24 +182,39 @@ func resourceCommand() *cli.Command {
 		Commands: []*cli.Command{
 			{
 				Name:      "schema",
-				Usage:     "Get the schema for a specific resource",
-				ArgsUsage: "<resource-name>",
+				Usage:     "Get the schema for one resource, or all when no name given",
+				ArgsUsage: "[resource-name]",
 				Action: func(_ context.Context, cmd *cli.Command) error {
-					args := cmd.Args()
-					if args.Len() < 1 {
-						return fmt.Errorf("resource name is required as an argument")
+					args := cmd.Args().Slice()
+					if len(args) > 1 {
+						return fmt.Errorf("expected at most 1 resource name, got %d", len(args))
 					}
-					resourceName := args.First()
 
 					s := newServer(cmd)
 					defer s.Cleanup()
-
 					req := requestFromCmd(cmd)
-					schema, err := s.GetResourceSchema(req, resourceName)
+
+					if len(args) == 1 {
+						schema, err := s.GetResourceSchema(req, args[0])
+						if err != nil {
+							return err
+						}
+						return printJSON(schema)
+					}
+
+					names, err := s.ListResources(req)
 					if err != nil {
 						return err
 					}
-					return printJSON(schema)
+					all := make(map[string]*tfjson.Schema, len(names))
+					for _, n := range names {
+						sc, err := s.GetResourceSchema(req, n)
+						if err != nil {
+							return err
+						}
+						all[n] = sc
+					}
+					return printJSON(all)
 				},
 			},
 			{
@@ -230,24 +246,39 @@ func datasourceCommand() *cli.Command {
 		Commands: []*cli.Command{
 			{
 				Name:      "schema",
-				Usage:     "Get the schema for a specific data source",
-				ArgsUsage: "<datasource-name>",
+				Usage:     "Get the schema for one data source, or all when no name given",
+				ArgsUsage: "[datasource-name]",
 				Action: func(_ context.Context, cmd *cli.Command) error {
-					args := cmd.Args()
-					if args.Len() < 1 {
-						return fmt.Errorf("data source name is required as an argument")
+					args := cmd.Args().Slice()
+					if len(args) > 1 {
+						return fmt.Errorf("expected at most 1 data source name, got %d", len(args))
 					}
-					dsName := args.First()
 
 					s := newServer(cmd)
 					defer s.Cleanup()
-
 					req := requestFromCmd(cmd)
-					schema, err := s.GetDataSourceSchema(req, dsName)
+
+					if len(args) == 1 {
+						schema, err := s.GetDataSourceSchema(req, args[0])
+						if err != nil {
+							return err
+						}
+						return printJSON(schema)
+					}
+
+					names, err := s.ListDataSources(req)
 					if err != nil {
 						return err
 					}
-					return printJSON(schema)
+					all := make(map[string]*tfjson.Schema, len(names))
+					for _, n := range names {
+						sc, err := s.GetDataSourceSchema(req, n)
+						if err != nil {
+							return err
+						}
+						all[n] = sc
+					}
+					return printJSON(all)
 				},
 			},
 			{
@@ -279,24 +310,39 @@ func functionCommand() *cli.Command {
 		Commands: []*cli.Command{
 			{
 				Name:      "schema",
-				Usage:     "Get the schema for a specific function",
-				ArgsUsage: "<function-name>",
+				Usage:     "Get the schema for one function, or all when no name given",
+				ArgsUsage: "[function-name]",
 				Action: func(_ context.Context, cmd *cli.Command) error {
-					args := cmd.Args()
-					if args.Len() < 1 {
-						return fmt.Errorf("function name is required as an argument")
+					args := cmd.Args().Slice()
+					if len(args) > 1 {
+						return fmt.Errorf("expected at most 1 function name, got %d", len(args))
 					}
-					funcName := args.First()
 
 					s := newServer(cmd)
 					defer s.Cleanup()
-
 					req := requestFromCmd(cmd)
-					schema, err := s.GetFunctionSchema(req, funcName)
+
+					if len(args) == 1 {
+						schema, err := s.GetFunctionSchema(req, args[0])
+						if err != nil {
+							return err
+						}
+						return printJSON(schema)
+					}
+
+					names, err := s.ListFunctions(req)
 					if err != nil {
 						return err
 					}
-					return printJSON(schema)
+					all := make(map[string]*tfjson.FunctionSignature, len(names))
+					for _, n := range names {
+						sc, err := s.GetFunctionSchema(req, n)
+						if err != nil {
+							return err
+						}
+						all[n] = sc
+					}
+					return printJSON(all)
 				},
 			},
 			{
@@ -328,24 +374,39 @@ func ephemeralCommand() *cli.Command {
 		Commands: []*cli.Command{
 			{
 				Name:      "schema",
-				Usage:     "Get the schema for a specific ephemeral resource",
-				ArgsUsage: "<ephemeral-resource-name>",
+				Usage:     "Get the schema for one ephemeral resource, or all when no name given",
+				ArgsUsage: "[ephemeral-resource-name]",
 				Action: func(_ context.Context, cmd *cli.Command) error {
-					args := cmd.Args()
-					if args.Len() < 1 {
-						return fmt.Errorf("ephemeral resource name is required as an argument")
+					args := cmd.Args().Slice()
+					if len(args) > 1 {
+						return fmt.Errorf("expected at most 1 ephemeral resource name, got %d", len(args))
 					}
-					ephName := args.First()
 
 					s := newServer(cmd)
 					defer s.Cleanup()
-
 					req := requestFromCmd(cmd)
-					schema, err := s.GetEphemeralResourceSchema(req, ephName)
+
+					if len(args) == 1 {
+						schema, err := s.GetEphemeralResourceSchema(req, args[0])
+						if err != nil {
+							return err
+						}
+						return printJSON(schema)
+					}
+
+					names, err := s.ListEphemeralResources(req)
 					if err != nil {
 						return err
 					}
-					return printJSON(schema)
+					all := make(map[string]*tfjson.Schema, len(names))
+					for _, n := range names {
+						sc, err := s.GetEphemeralResourceSchema(req, n)
+						if err != nil {
+							return err
+						}
+						all[n] = sc
+					}
+					return printJSON(all)
 				},
 			},
 			{
