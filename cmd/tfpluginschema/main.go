@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	tfjson "github.com/hashicorp/terraform-json"
 	cli "github.com/urfave/cli/v3"
 
 	"github.com/matt-FFFFFF/tfpluginschema"
@@ -184,12 +185,17 @@ func resourceCommand() *cli.Command {
 				Usage:     "Get the schema for one resource, or all when no name given",
 				ArgsUsage: "[resource-name]",
 				Action: func(_ context.Context, cmd *cli.Command) error {
+					args := cmd.Args().Slice()
+					if len(args) > 1 {
+						return fmt.Errorf("expected at most 1 resource name, got %d", len(args))
+					}
+
 					s := newServer(cmd)
 					defer s.Cleanup()
 					req := requestFromCmd(cmd)
 
-					if name := cmd.Args().First(); name != "" {
-						schema, err := s.GetResourceSchema(req, name)
+					if len(args) == 1 {
+						schema, err := s.GetResourceSchema(req, args[0])
 						if err != nil {
 							return err
 						}
@@ -200,7 +206,7 @@ func resourceCommand() *cli.Command {
 					if err != nil {
 						return err
 					}
-					all := make(map[string]any, len(names))
+					all := make(map[string]*tfjson.Schema, len(names))
 					for _, n := range names {
 						sc, err := s.GetResourceSchema(req, n)
 						if err != nil {
@@ -243,12 +249,17 @@ func datasourceCommand() *cli.Command {
 				Usage:     "Get the schema for one data source, or all when no name given",
 				ArgsUsage: "[datasource-name]",
 				Action: func(_ context.Context, cmd *cli.Command) error {
+					args := cmd.Args().Slice()
+					if len(args) > 1 {
+						return fmt.Errorf("expected at most 1 data source name, got %d", len(args))
+					}
+
 					s := newServer(cmd)
 					defer s.Cleanup()
 					req := requestFromCmd(cmd)
 
-					if name := cmd.Args().First(); name != "" {
-						schema, err := s.GetDataSourceSchema(req, name)
+					if len(args) == 1 {
+						schema, err := s.GetDataSourceSchema(req, args[0])
 						if err != nil {
 							return err
 						}
@@ -259,7 +270,7 @@ func datasourceCommand() *cli.Command {
 					if err != nil {
 						return err
 					}
-					all := make(map[string]any, len(names))
+					all := make(map[string]*tfjson.Schema, len(names))
 					for _, n := range names {
 						sc, err := s.GetDataSourceSchema(req, n)
 						if err != nil {
@@ -302,12 +313,17 @@ func functionCommand() *cli.Command {
 				Usage:     "Get the schema for one function, or all when no name given",
 				ArgsUsage: "[function-name]",
 				Action: func(_ context.Context, cmd *cli.Command) error {
+					args := cmd.Args().Slice()
+					if len(args) > 1 {
+						return fmt.Errorf("expected at most 1 function name, got %d", len(args))
+					}
+
 					s := newServer(cmd)
 					defer s.Cleanup()
 					req := requestFromCmd(cmd)
 
-					if name := cmd.Args().First(); name != "" {
-						schema, err := s.GetFunctionSchema(req, name)
+					if len(args) == 1 {
+						schema, err := s.GetFunctionSchema(req, args[0])
 						if err != nil {
 							return err
 						}
@@ -318,7 +334,7 @@ func functionCommand() *cli.Command {
 					if err != nil {
 						return err
 					}
-					all := make(map[string]any, len(names))
+					all := make(map[string]*tfjson.FunctionSignature, len(names))
 					for _, n := range names {
 						sc, err := s.GetFunctionSchema(req, n)
 						if err != nil {
@@ -361,12 +377,17 @@ func ephemeralCommand() *cli.Command {
 				Usage:     "Get the schema for one ephemeral resource, or all when no name given",
 				ArgsUsage: "[ephemeral-resource-name]",
 				Action: func(_ context.Context, cmd *cli.Command) error {
+					args := cmd.Args().Slice()
+					if len(args) > 1 {
+						return fmt.Errorf("expected at most 1 ephemeral resource name, got %d", len(args))
+					}
+
 					s := newServer(cmd)
 					defer s.Cleanup()
 					req := requestFromCmd(cmd)
 
-					if name := cmd.Args().First(); name != "" {
-						schema, err := s.GetEphemeralResourceSchema(req, name)
+					if len(args) == 1 {
+						schema, err := s.GetEphemeralResourceSchema(req, args[0])
 						if err != nil {
 							return err
 						}
@@ -377,7 +398,7 @@ func ephemeralCommand() *cli.Command {
 					if err != nil {
 						return err
 					}
-					all := make(map[string]any, len(names))
+					all := make(map[string]*tfjson.Schema, len(names))
 					for _, n := range names {
 						sc, err := s.GetEphemeralResourceSchema(req, n)
 						if err != nil {

@@ -189,7 +189,7 @@ tfpluginschema --ns <namespace> -n <name> \
 
 Global flags:
 
-| Flag | Short | Description |
+| Flag | Alias | Description |
 |---|---|---|
 | `--namespace` | `--ns` | Provider namespace (required). |
 | `--name` | `-n` | Provider name (required). |
