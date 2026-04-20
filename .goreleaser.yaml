@@ -32,6 +32,26 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+brews:
+  - name: tfpluginschema
+    ids:
+      - tfpluginschema
+    repository:
+      owner: matt-FFFFFF
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/matt-FFFFFF/tfpluginschema"
+    description: "Download and retrieve schemas from Terraform/OpenTofu providers using the Terraform Plugin Protocol (v5 and v6)."
+    license: "MPL-2.0"
+    commit_author:
+      name: matt-ffffff-tapper[bot]
+      email: 41898282+matt-ffffff-tapper[bot]@users.noreply.github.com
+    commit_msg_template: "brew: update {{ .ProjectName }} to {{ .Tag }}"
+    test: |
+      system "#{bin}/tfpluginschema", "--version"
+
 changelog:
   sort: asc
   filters:
