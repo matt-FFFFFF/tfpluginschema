@@ -179,6 +179,66 @@ defer server.Cleanup()
 // Server will now use custom logger for all operations
 ```
 
+## CLI
+
+```
+tfpluginschema --ns <namespace> -n <name> \
+  [--version-constraint VERSION] [--registry opentofu|terraform] \
+  <command>
+```
+
+Global flags:
+
+| Flag | Short | Description |
+|---|---|---|
+| `--namespace` | `--ns` | Provider namespace (required). |
+| `--name` | `-n` | Provider name (required). |
+| `--version-constraint` | `--vc` | Concrete version or constraint. Empty = latest. |
+| `--registry` | `-r` | `opentofu` (default) or `terraform`. |
+| `--cache-dir` | | Cache directory. Overrides `$TFPLUGINSCHEMA_CACHE_DIR`. |
+| `--force-fetch` | | Always re-download. |
+| `--quiet` | | Suppress `cache hit:` / `downloading:` status on stderr. |
+
+Commands:
+
+| Command | Description |
+|---|---|
+| `provider schema` | Provider configuration schema as JSON. |
+| `resource list` | Newline-separated resource type names. |
+| `resource schema [name]` | Full schema for one resource, or all. |
+| `datasource list` | Newline-separated data source names. |
+| `datasource schema [name]` | Full schema for one data source, or all. |
+| `function list` | Newline-separated function names. |
+| `function schema [name]` | Full schema for one function, or all. |
+| `ephemeral list` | Newline-separated ephemeral resource names. |
+| `ephemeral schema [name]` | Full schema for one ephemeral resource, or all. |
+| `version list` | All versions the registry advertises. |
+
+### Examples
+
+```bash
+# List versions (OpenTofu registry by default).
+tfpluginschema --ns hashicorp -n aws version list
+
+# Provider configuration schema, pinned version.
+tfpluginschema --ns hashicorp -n aws --vc 5.0.0 provider schema
+
+# Just the resource type names for the latest version.
+tfpluginschema --ns hashicorp -n aws resource list
+
+# Schema for one resource.
+tfpluginschema --ns hashicorp -n aws --vc 5.0.0 resource schema aws_instance
+
+# Schema for one data source.
+tfpluginschema --ns hashicorp -n aws --vc 5.0.0 datasource schema aws_ami
+
+# Use the HashiCorp registry.
+tfpluginschema -r terraform --ns Azure -n azapi resource list
+
+# Dump every resource schema at once.
+tfpluginschema --ns hashicorp -n aws --vc 5.0.0 resource schema
+```
+
 ## Architecture
 
 The library consists of several key components:
