@@ -1,6 +1,8 @@
 # tfpluginschema
 
-A Go library for downloading and retrieving schemas from Terraform/OpenTofu providers using the Terraform Plugin Protocol (v5 and v6).
+A Go library & cli for downloading and retrieving schemas from Terraform/OpenTofu providers using the Terraform Plugin Protocol (v5 and v6).
+
+Sibling project to [tfmoduleschema](https://github.com/matt-FFFFFF/tfmoduleschema), but for providers instead of modules.
 
 ## Overview
 
